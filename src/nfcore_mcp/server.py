@@ -12,6 +12,7 @@ from nfcore_mcp.tools.samplesheet import (
 )
 from nfcore_mcp.tools.parameters import get_parameters, suggest_parameters
 from nfcore_mcp.tools.results import generate_launch_command, parse_run_summary
+from nfcore_mcp.tools.feasibility import check_feasibility
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,6 +26,8 @@ mcp = FastMCP(
 You are connected to the nf-core bioinformatics pipeline ecosystem.
 
 Typical workflow:
+0. Use check_feasibility first when a user arrives with files and a goal but
+   hasn't chosen a pipeline — it matches, audits gaps, and prescribes next steps.
 1. Use list_pipelines to discover pipelines for a given data type or topic.
 2. Use get_pipeline_info to understand what a pipeline expects as input.
 3. Use get_samplesheet_schema to learn the required CSV format.
@@ -41,6 +44,7 @@ before executing any pipeline command.
 """,
 )
 
+mcp.tool(check_feasibility)
 mcp.tool(list_pipelines)
 mcp.tool(get_pipeline_info)
 mcp.tool(get_samplesheet_schema)
