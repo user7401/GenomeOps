@@ -13,6 +13,7 @@ from nfcore_mcp.tools.samplesheet import (
 from nfcore_mcp.tools.parameters import get_parameters, suggest_parameters
 from nfcore_mcp.tools.results import generate_launch_command, parse_run_summary
 from nfcore_mcp.tools.feasibility import check_feasibility
+from nfcore_mcp.tools.versioning import get_latest_version
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +31,10 @@ Typical workflow:
    hasn't chosen a pipeline — it matches, audits gaps, and prescribes next steps.
 1. Use list_pipelines to discover pipelines for a given data type or topic.
 2. Use get_pipeline_info to understand what a pipeline expects as input.
+   IMPORTANT: After get_pipeline_info, always call get_latest_version to pin
+   to a stable release tag. Never use 'master' in production runs.
+   If get_latest_version returns is_dev=true, stop and ask the user before
+   proceeding — they must decide whether to accept the dev version.
 3. Use get_samplesheet_schema to learn the required CSV format.
 4. Use generate_samplesheet to draft a samplesheet from file paths.
 5. Use validate_samplesheet to check for errors before running.
@@ -45,6 +50,7 @@ before executing any pipeline command.
 )
 
 mcp.tool(check_feasibility)
+mcp.tool(get_latest_version)
 mcp.tool(list_pipelines)
 mcp.tool(get_pipeline_info)
 mcp.tool(get_samplesheet_schema)

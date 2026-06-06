@@ -11,13 +11,16 @@ from typing import Any
 import httpx
 
 from nfcore_mcp.cache import cache_get, cache_set
+from nfcore_mcp.clients.github import _github_headers
 
 logger = logging.getLogger(__name__)
 
 _NFCORE_API = "https://nf-co.re/api/v2"
 _GITHUB_SEARCH = "https://api.github.com/search/repositories"
 _GITHUB_REPO = "https://api.github.com/repos/nf-core"
-_GITHUB_RELEASES = "https://api.github.com/repos/nf-core/{name}/releases/latest"
+_GITHUB_RELEASES = "https://api.github.com/repos/nf-core/{name}/releases/latest"  # kept for compat
+
+from nfcore_mcp.clients.github import get_pipeline_release as _get_pipeline_release
 
 _PIPELINES_TTL = 3600       # 1 hour
 _PIPELINE_META_TTL = 3600   # 1 hour
@@ -65,7 +68,7 @@ async def get_pipeline(name: str) -> dict[str, Any] | None:
 
     if detail is None:
         # Check if it's in the already-cached pipeline list (avoids a separate API call)
-        detail = _lookup_in_list_cache(name)
+        detail = await _lookup_in_list_cache(name)
 
     if detail is None:
         detail = await _fetch_pipeline_github(name)
@@ -77,19 +80,25 @@ async def get_pipeline(name: str) -> dict[str, Any] | None:
     return detail
 
 
-def _lookup_in_list_cache(name: str) -> dict[str, Any] | None:
-    """Find a pipeline in the already-cached full list and promote it to full detail."""
+async def _lookup_in_list_cache(name: str) -> dict[str, Any] | None:
+    """Find a pipeline in the cached full list and resolve its real version."""
     cached_list = cache_get("nfcore_api:pipelines", _PIPELINES_TTL)
     if not cached_list:
         return None
     match = next((p for p in cached_list if p["name"].lower() == name.lower()), None)
     if not match:
         return None
+
+    version = match.get("latest_version", "master")
+    # GitHub search returns "master" as a placeholder — resolve to a real tag.
+    if version == "master":
+        version = await _resolve_version(match["name"])
+
     return _build_detail(
         name=match["name"],
-        description=match.get("description", ""),
-        topics=match.get("topics", []),
-        version=match.get("latest_version", "master"),
+        description=match.get("description") or "",
+        topics=match.get("topics") or [],
+        version=version,
     )
 
 
@@ -149,7 +158,7 @@ async def _fetch_via_github() -> list[dict[str, Any]]:
                     "per_page": 100,
                     "page": page,
                 },
-                headers={"Accept": "application/vnd.github+json"},
+                headers=_github_headers(),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -176,7 +185,7 @@ async def _fetch_pipeline_github(name: str) -> dict[str, Any] | None:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.get(
                 f"{_GITHUB_REPO}/{name.lower()}",
-                headers={"Accept": "application/vnd.github+json"},
+                headers=_github_headers(),
             )
             if resp.status_code in (404, 403):
                 return None
@@ -186,7 +195,7 @@ async def _fetch_pipeline_github(name: str) -> dict[str, Any] | None:
             version = await _fetch_latest_release(client, name.lower())
             topics_resp = await client.get(
                 f"{_GITHUB_REPO}/{name.lower()}/topics",
-                headers={"Accept": "application/vnd.github.mercy-preview+json"},
+                headers={**_github_headers(), "Accept": "application/vnd.github.mercy-preview+json"},
             )
             topics = topics_resp.json().get("names", []) if topics_resp.status_code == 200 else []
 
@@ -195,17 +204,18 @@ async def _fetch_pipeline_github(name: str) -> dict[str, Any] | None:
         return None
 
 
-async def _fetch_latest_release(client: httpx.AsyncClient, name: str) -> str:
+async def _resolve_version(name: str) -> str:
+    """Return the recommended stable version tag for a pipeline."""
     try:
-        resp = await client.get(
-            _GITHUB_RELEASES.format(name=name),
-            headers={"Accept": "application/vnd.github+json"},
-        )
-        if resp.status_code == 200:
-            return resp.json().get("tag_name", "master")
+        info = await _get_pipeline_release(name)
+        return info.get("recommended", "master")
     except Exception:
-        pass
-    return "master"
+        return "master"
+
+
+async def _fetch_latest_release(client: httpx.AsyncClient, name: str) -> str:
+    """Kept for _fetch_pipeline_github; delegates to the release classifier."""
+    return await _resolve_version(name)
 
 
 # ---------------------------------------------------------------------------
