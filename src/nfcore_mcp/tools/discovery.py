@@ -47,8 +47,8 @@ async def list_pipelines(topic: str | None = None) -> dict[str, Any]:
         filtered = [
             p for p in all_pipelines
             if needle in p["name"].lower()
-            or needle in p["description"].lower()
-            or any(needle in t.lower() for t in p["topics"])
+            or needle in (p.get("description") or "").lower()
+            or any(needle in t.lower() for t in (p.get("topics") or []))
         ]
     else:
         filtered = all_pipelines

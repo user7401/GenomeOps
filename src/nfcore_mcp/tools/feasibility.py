@@ -365,8 +365,8 @@ def _score_pipelines(
         name = pipeline["name"]
         base_score, hits = keyword_scores.get(name, (0.0, []))
 
-        desc_lower = pipeline.get("description", "").lower()
-        topic_lower = " ".join(pipeline.get("topics", [])).lower()
+        desc_lower = (pipeline.get("description") or "").lower()
+        topic_lower = " ".join(pipeline.get("topics") or []).lower()
         combined = f"{name} {desc_lower} {topic_lower}"
 
         # Extra points for goal words appearing in live metadata

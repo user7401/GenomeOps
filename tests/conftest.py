@@ -132,8 +132,9 @@ MOCK_NEXTFLOW_SCHEMA = {
 
 @pytest.fixture
 def mock_nfcore_api():
-    """Mock the nf-co.re API responses."""
+    """Mock the nf-co.re API and GitHub API fallback responses."""
     with respx.mock(assert_all_called=False) as mock:
+        # --- nf-co.re primary API ---
         mock.get("https://nf-co.re/api/v2/pipelines").mock(
             return_value=httpx.Response(200, json=MOCK_PIPELINES_RESPONSE)
         )
@@ -151,10 +152,18 @@ def mock_nfcore_api():
         mock.get("https://nf-co.re/api/v2/pipelines/notexist").mock(
             return_value=httpx.Response(404)
         )
-        # Typo variants — return 404 so the "did you mean" logic kicks in
         mock.get("https://nf-co.re/api/v2/pipelines/rnseq").mock(
             return_value=httpx.Response(404)
         )
+
+        # --- GitHub API fallback (triggered when nf-co.re returns 404) ---
+        mock.get("https://api.github.com/repos/nf-core/notexist").mock(
+            return_value=httpx.Response(404)
+        )
+        mock.get("https://api.github.com/repos/nf-core/rnseq").mock(
+            return_value=httpx.Response(404)
+        )
+
         yield mock
 
 
@@ -163,7 +172,7 @@ def mock_github_schemas():
     """Mock GitHub raw content responses for schemas."""
     with respx.mock(assert_all_called=False) as mock:
         mock.get(
-            "https://raw.githubusercontent.com/nf-core/rnaseq/main/assets/schema_input.json"
+            "https://raw.githubusercontent.com/nf-core/rnaseq/master/assets/schema_input.json"
         ).mock(return_value=httpx.Response(200, json=MOCK_SAMPLESHEET_SCHEMA))
 
         mock.get(
@@ -171,15 +180,15 @@ def mock_github_schemas():
         ).mock(return_value=httpx.Response(200, json=MOCK_SAMPLESHEET_SCHEMA))
 
         mock.get(
-            "https://raw.githubusercontent.com/nf-core/rnaseq/main/nextflow_schema.json"
+            "https://raw.githubusercontent.com/nf-core/rnaseq/master/nextflow_schema.json"
         ).mock(return_value=httpx.Response(200, json=MOCK_NEXTFLOW_SCHEMA))
 
         mock.get(
-            "https://raw.githubusercontent.com/nf-core/notexist/main/assets/schema_input.json"
+            "https://raw.githubusercontent.com/nf-core/notexist/master/assets/schema_input.json"
         ).mock(return_value=httpx.Response(404))
 
         mock.get(
-            "https://raw.githubusercontent.com/nf-core/notexist/main/nextflow_schema.json"
+            "https://raw.githubusercontent.com/nf-core/notexist/master/nextflow_schema.json"
         ).mock(return_value=httpx.Response(404))
 
         yield mock

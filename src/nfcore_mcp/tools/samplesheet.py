@@ -28,7 +28,7 @@ _R2_PATTERNS = [
 
 async def get_samplesheet_schema(
     pipeline_name: str,
-    version: str = "main",
+    version: str = "master",
 ) -> dict[str, Any]:
     """Retrieve and describe the samplesheet schema for an nf-core pipeline.
 
@@ -70,7 +70,7 @@ async def get_samplesheet_schema(
 async def validate_samplesheet(
     pipeline_name: str,
     samplesheet_content: str,
-    version: str = "main",
+    version: str = "master",
 ) -> dict[str, Any]:
     """Validate a samplesheet CSV against the pipeline's input schema.
 
@@ -139,7 +139,7 @@ async def validate_samplesheet(
 async def generate_samplesheet(
     pipeline_name: str,
     file_paths: list[str],
-    version: str = "main",
+    version: str = "master",
 ) -> dict[str, Any]:
     """Generate a samplesheet CSV from a list of input file paths.
 

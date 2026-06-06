@@ -14,7 +14,7 @@ _PATH_FORMATS = {"file-path", "directory-path", "path"}
 
 async def get_parameters(
     pipeline_name: str,
-    version: str = "main",
+    version: str = "master",
     group: str | None = None,
 ) -> dict[str, Any]:
     """Retrieve and describe all parameters for an nf-core pipeline.
@@ -77,7 +77,7 @@ async def get_parameters(
 async def suggest_parameters(
     pipeline_name: str,
     experiment_description: str,
-    version: str = "main",
+    version: str = "master",
 ) -> dict[str, Any]:
     """Suggest pipeline parameters based on a plain-language experiment description.
 

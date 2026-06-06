@@ -13,7 +13,7 @@ _SCHEMA_TTL = 86400  # 24 hours — immutable once a version is tagged
 _RAW_BASE = "https://raw.githubusercontent.com/nf-core"
 
 
-async def get_samplesheet_schema(pipeline: str, version: str = "main") -> dict[str, Any]:
+async def get_samplesheet_schema(pipeline: str, version: str = "master") -> dict[str, Any]:
     """Fetch and return the parsed samplesheet JSON schema for a pipeline.
 
     Retrieves assets/schema_input.json from the nf-core GitHub repository.
@@ -34,7 +34,7 @@ async def get_samplesheet_schema(pipeline: str, version: str = "main") -> dict[s
     return schema
 
 
-async def get_nextflow_schema(pipeline: str, version: str = "main") -> dict[str, Any]:
+async def get_nextflow_schema(pipeline: str, version: str = "master") -> dict[str, Any]:
     """Fetch and return the parsed nextflow_schema.json for a pipeline.
 
     This is the full parameter schema including all pipeline options, defaults,
