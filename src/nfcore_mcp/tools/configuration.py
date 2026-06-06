@@ -25,9 +25,14 @@ import os
 import re
 from typing import Any
 
+from nfcore_mcp.cache import cache_get, cache_set
 from nfcore_mcp.clients.github import get_nextflow_schema
 
 logger = logging.getLogger(__name__)
+
+# Classification of an immutable, version-pinned schema is itself immutable —
+# cache it as long as the schema (24h covers the moving 'master' branch).
+_CLASSIFY_TTL = 86400
 
 # ---------------------------------------------------------------------------
 # Tiers
@@ -114,9 +119,17 @@ async def analyze_pipeline_schema(
     pipeline can take: which aligner/quantifier/peak-caller it will use, which
     stages can be skipped, and every numeric knob that changes the result.
 
-    Call this immediately after a pipeline is chosen and pinned to a version.
-    It is deterministic (no AI, no API key) and gives the agent the full menu of
-    choices so it — or the user — can decide what to configure before launching
+    The schema is flattened deterministically, then each parameter is classified
+    by an LLM that reads the actual description and help_text fields — extracting
+    any expert guidance embedded there (e.g. "typically 2.7e9 for human") and the
+    conditional relationships between parameters (e.g. an index that is only
+    needed for a particular aligner). Because a version-pinned schema is
+    immutable, this classification is cached for 24h, so it is a one-time cost
+    per pipeline version. With no ANTHROPIC_API_KEY set it falls back to a fast
+    name-based heuristic.
+
+    Call this immediately after a pipeline is chosen and pinned to a version, so
+    the agent — or the user — has the full menu of choices before launching
     expert mode (configure_parameters).
 
     Args:
@@ -127,16 +140,20 @@ async def analyze_pipeline_schema(
         {
           "pipeline": str,
           "version": str,
+          "classification_method": "llm" | "llm-cached" | "heuristic",
           "parameter_count": int,
           "decision_points": [          # branch points that change the analysis path
             {"param","kind","options","default","stage","tier","affects"}
           ],
           "path_count_estimate": int,   # product of decision-point option counts
+          "conditional_dependencies": [ # params only relevant under a condition
+            {"param","relevant_when"}
+          ],
           "tiers": {                    # every parameter, bucketed by difficulty
             "<tier>": {
               "label": str,
               "count": int,
-              "params": [ {param record + "tier" + "rationale"} ]
+              "params": [ {param record + tier/rationale/expert_guidance/relevant_when} ]
             }
           },
           "summary": str,
@@ -153,10 +170,7 @@ async def analyze_pipeline_schema(
         return {"error": True, "code": "FETCH_ERROR", "message": f"Could not fetch schema: {exc}"}
 
     params = _parse_rich(schema)
-    for p in params:
-        tier, rationale = _classify(p)
-        p["tier"] = tier
-        p["rationale"] = rationale
+    method = await _classify_all(params, pipeline_name, version)
 
     decision_points = _decision_points(params)
     path_estimate = 1
@@ -173,6 +187,11 @@ async def analyze_pipeline_schema(
                 "params": members,
             }
 
+    conditional = [
+        {"param": p["name"], "relevant_when": p["relevant_when"]}
+        for p in params if p.get("relevant_when")
+    ]
+
     n_ctx = len(tiers.get(CONTEXT_DEPENDENT, {}).get("params", []))
     n_expert = len(tiers.get(EXPERT_REQUIRED, {}).get("params", []))
     summary = (
@@ -186,9 +205,11 @@ async def analyze_pipeline_schema(
     return {
         "pipeline": pipeline_name,
         "version": version,
+        "classification_method": method,
         "parameter_count": len(params),
         "decision_points": decision_points,
         "path_count_estimate": path_estimate,
+        "conditional_dependencies": conditional,
         "tiers": tiers,
         "summary": summary,
         "next_steps": [
@@ -277,12 +298,8 @@ async def configure_parameters(
     user_choices = _normalise_choices(user_choices or {})
 
     params = _parse_rich(schema)
-    by_name: dict[str, dict[str, Any]] = {}
-    for p in params:
-        tier, rationale = _classify(p)
-        p["tier"] = tier
-        p["rationale"] = rationale
-        by_name[p["raw_name"]] = p
+    await _classify_all(params, pipeline_name, version)
+    by_name: dict[str, dict[str, Any]] = {p["raw_name"]: p for p in params}
 
     resolved: dict[str, Any] = {}
     sources: dict[str, str] = {}
@@ -445,8 +462,161 @@ def _parse_rich(schema: dict[str, Any]) -> list[dict[str, Any]]:
 # Classification
 # ===========================================================================
 
+async def _classify_all(
+    params: list[dict[str, Any]],
+    pipeline: str,
+    version: str,
+) -> str:
+    """Classify every parameter in place; return the method used.
+
+    Prefers an LLM that reads each parameter's description and help_text
+    (capturing embedded expert guidance and conditional dependencies). Caches
+    the result for 24h per (pipeline, version). Falls back to the name-based
+    heuristic when no API key is set or the call fails.
+
+    Adds these keys to every param record: tier, rationale, expert_guidance,
+    relevant_when.
+    """
+    key = f"param_classification:{pipeline}:{version}"
+    cached = cache_get(key, _CLASSIFY_TTL)
+    if cached is not None:
+        _apply_classification(params, cached.get("classifications", {}))
+        return f"{cached.get('method', 'llm')}-cached"
+
+    llm = await _llm_classify(params, pipeline)
+    if llm:
+        cache_set(key, {"method": "llm", "classifications": llm})
+        _apply_classification(params, llm)
+        return "llm"
+
+    for p in params:
+        tier, rationale = _classify(p)
+        p["tier"] = tier
+        p["rationale"] = rationale
+        p["expert_guidance"] = None
+        p["relevant_when"] = None
+    return "heuristic"
+
+
+def _apply_classification(
+    params: list[dict[str, Any]],
+    classifications: dict[str, Any],
+) -> None:
+    """Merge an LLM classification onto param records; heuristic-fill any gaps."""
+    for p in params:
+        c = classifications.get(p["raw_name"])
+        if isinstance(c, dict) and c.get("tier") in _TIER_ORDER:
+            p["tier"] = c["tier"]
+            p["rationale"] = c.get("rationale", "")
+            p["expert_guidance"] = c.get("expert_guidance")
+            p["relevant_when"] = c.get("relevant_when")
+        else:
+            tier, rationale = _classify(p)
+            p["tier"] = tier
+            p["rationale"] = rationale
+            p["expert_guidance"] = None
+            p["relevant_when"] = None
+
+
+async def _llm_classify(
+    params: list[dict[str, Any]],
+    pipeline: str,
+) -> dict[str, Any] | None:
+    """Classify parameters by having Claude read their descriptions/help_text.
+
+    Returns {raw_name: {tier, rationale, expert_guidance, relevant_when}} or
+    None on any failure (no key, import error, parse error, empty result).
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        return None
+
+    lines = []
+    for p in params:
+        bits = [f"type={p['type']}"]
+        if p["allowed_values"]:
+            bits.append(f"enum={p['allowed_values']}")
+        if p["minimum"] is not None or p["maximum"] is not None:
+            bits.append(f"range={p['minimum']}..{p['maximum']}")
+        bits.append(f"default={p['default']!r}")
+        meta = ", ".join(bits)
+        desc = p["description"] or "(no description)"
+        help_t = f" HELP: {p['help_text']}" if p["help_text"] else ""
+        lines.append(f"- {p['raw_name']} ({meta}): {desc}{help_t}")
+    param_block = "\n".join(lines)
+
+    prompt = f"""You are a bioinformatics expert auditing the parameters of nf-core/{pipeline}.
+
+Classify EVERY parameter below into exactly one tier:
+
+- provided_input: a core input or reference the user supplies/selects (samplesheet,
+  output dir, genome key, FASTA/GTF, prebuilt index).
+- auto_derivable: can be inferred from the structure of the user's files
+  (e.g. single- vs paired-end).
+- safe_default: resource/reporting/boilerplate or any knob whose shipped default
+  is fine for almost everyone.
+- context_dependent: a tool/method choice or numeric threshold whose right value
+  depends on the experiment, but for which a sensible starting value or default
+  exists.
+- expert_required: no safe default exists and choosing a value needs domain or
+  published knowledge (e.g. effective genome size, statistical model priors).
+
+Read the description and HELP text carefully. If the text states or implies a
+recommended value or rule of thumb (e.g. "typically 2.7e9 for human"), copy that
+into expert_guidance. If a parameter is only relevant under a condition (e.g.
+only used with a particular aligner, or only when another flag is set), state
+that briefly in relevant_when; otherwise null.
+
+Parameters:
+{param_block}
+
+Respond with ONLY valid JSON:
+{{
+  "classifications": {{
+    "<param_name_without_dashes>": {{
+      "tier": "<one of the five tiers>",
+      "rationale": "<short reason>",
+      "expert_guidance": "<recommended value/rule of thumb, or null>",
+      "relevant_when": "<condition this applies under, or null>"
+    }}
+  }}
+}}"""
+
+    try:
+        import json as _json
+        client = anthropic.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=16000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = message.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = _json.loads(raw.strip())
+        classifications = parsed.get("classifications", {})
+        valid = {
+            k: v for k, v in classifications.items()
+            if isinstance(v, dict) and v.get("tier") in _TIER_ORDER
+        }
+        return valid or None
+    except Exception as exc:  # noqa: BLE001 — degrade gracefully to heuristic
+        logger.warning("LLM classification failed for %s: %s", pipeline, exc)
+        return None
+
+
 def _classify(p: dict[str, Any]) -> tuple[str, str]:
-    """Assign a difficulty tier + human rationale to a parameter."""
+    """Heuristic fallback: assign a tier + rationale from the parameter's name.
+
+    Used only when the LLM classifier is unavailable. Less accurate than reading
+    the descriptions, but fast and dependency-free.
+    """
     raw = p["raw_name"]
     name_l = raw.lower()
     is_numeric = p["type"] in ("integer", "number")
@@ -622,6 +792,8 @@ def _question_for(p: dict[str, Any]) -> dict[str, Any]:
         "suggested_range": suggested_range,
         "default": p["default"],
         "why_it_matters": why,
+        "expert_guidance": p.get("expert_guidance"),
+        "relevant_when": p.get("relevant_when"),
     }
 
 

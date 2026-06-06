@@ -327,3 +327,105 @@ async def test_configure_schema_not_found(mock_demo_schema):
     result = await configure_parameters("notexist")
     assert result.get("error") is True
     assert result["code"] == "SCHEMA_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# LLM-backed classification
+# ---------------------------------------------------------------------------
+
+# An LLM classification that reads descriptions: it pulls expert_guidance out of
+# the schema text and notes a conditional dependency the regex heuristic cannot.
+CLASSIFY_JSON = (
+    '{"classifications": {'
+    '"macs_gsize": {"tier": "expert_required", "rationale": "genome size",'
+    ' "expert_guidance": "Use 2.7e9 for human (GRCh38).", "relevant_when": null},'
+    '"min_mapped_reads": {"tier": "context_dependent", "rationale": "qc floor",'
+    ' "expert_guidance": "5% is typical for bulk RNA-seq", "relevant_when": null},'
+    '"fasta": {"tier": "provided_input", "rationale": "reference",'
+    ' "expert_guidance": null, "relevant_when": "--genome is not set"}'
+    '}}'
+)
+
+
+def _make_fake_anthropic(monkeypatch, payload):
+    """Patch anthropic.Anthropic with a client whose create() returns payload."""
+    calls = {"n": 0}
+
+    class _Msg:
+        content = [type("C", (), {"text": payload})()]
+
+    class _Client:
+        def __init__(self, *a, **k):
+            self.messages = self
+
+        def create(self, *a, **k):
+            calls["n"] += 1
+            return _Msg()
+
+    import anthropic
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_llm_classification_surfaces_guidance_and_conditions(mock_demo_schema, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _make_fake_anthropic(monkeypatch, CLASSIFY_JSON)
+
+    result = await analyze_pipeline_schema("demo")
+
+    assert result["classification_method"] == "llm"
+
+    expert_params = {p["name"]: p for p in result["tiers"][EXPERT_REQUIRED]["params"]}
+    assert "--macs_gsize" in expert_params
+    assert expert_params["--macs_gsize"]["expert_guidance"] == "Use 2.7e9 for human (GRCh38)."
+
+    # Conditional dependency the heuristic could never infer from a name alone
+    conds = {c["param"]: c["relevant_when"] for c in result["conditional_dependencies"]}
+    assert conds.get("--fasta") == "--genome is not set"
+
+
+@pytest.mark.asyncio
+async def test_llm_classification_is_cached(mock_demo_schema, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    calls = _make_fake_anthropic(monkeypatch, CLASSIFY_JSON)
+
+    first = await analyze_pipeline_schema("demo")
+    second = await analyze_pipeline_schema("demo")
+
+    assert first["classification_method"] == "llm"
+    assert second["classification_method"] == "llm-cached"
+    assert calls["n"] == 1  # second call served from cache, no new API hit
+
+
+@pytest.mark.asyncio
+async def test_llm_guidance_flows_into_questions(mock_demo_schema, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _make_fake_anthropic(monkeypatch, CLASSIFY_JSON)
+
+    # interactive mode keeps context/expert params as questions
+    result = await configure_parameters("demo", mode="interactive")
+    asked = {q["param"]: q for q in result["needs_user_input"]}
+
+    assert asked["--macs_gsize"]["expert_guidance"] == "Use 2.7e9 for human (GRCh38)."
+    assert asked["--min_mapped_reads"]["expert_guidance"] == "5% is typical for bulk RNA-seq"
+
+
+@pytest.mark.asyncio
+async def test_llm_invalid_output_falls_back_to_heuristic(mock_demo_schema, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _make_fake_anthropic(monkeypatch, "not json at all")
+
+    result = await analyze_pipeline_schema("demo")
+
+    assert result["classification_method"] == "heuristic"
+    # heuristic still classifies macs_gsize as expert_required
+    expert_names = {p["name"] for p in result["tiers"][EXPERT_REQUIRED]["params"]}
+    assert "--macs_gsize" in expert_names
+
+
+@pytest.mark.asyncio
+async def test_no_key_uses_heuristic(mock_demo_schema, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    result = await analyze_pipeline_schema("demo")
+    assert result["classification_method"] == "heuristic"
