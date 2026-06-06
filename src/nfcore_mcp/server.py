@@ -16,6 +16,12 @@ from nfcore_mcp.tools.configuration import (
     configure_parameters,
 )
 from nfcore_mcp.tools.results import generate_launch_command, parse_run_summary
+from nfcore_mcp.tools.execution import (
+    check_execution_environment,
+    setup_environment,
+    run_pipeline,
+    get_run_status,
+)
 from nfcore_mcp.tools.feasibility import check_feasibility
 from nfcore_mcp.tools.versioning import get_latest_version
 
@@ -54,13 +60,24 @@ Typical workflow:
    "expert_required") MUST be put to the user; never guess them.
 8. Use get_parameters / suggest_parameters for a flat list or one-shot AI
    recommendations when the structured framework above is more than you need.
-9. Use generate_launch_command to assemble the nextflow run command.
-10. After a run completes, use parse_run_summary to assess QC and results.
+9. Use generate_launch_command to assemble the nextflow run command for review.
+10. Use check_execution_environment to verify Nextflow + a container engine are
+    installed and to pick a viable -profile. nf-core builds per-process
+    environments automatically; the user does NOT set up conda per tool.
+11. Use setup_environment to cache the pipeline and resolve its config (a dry
+    run) before spending compute.
+12. Use run_pipeline to launch the analysis. It is gated: with confirm=false it
+    only previews the validated command; it runs ONLY with confirm=true, which
+    consumes compute. Always show the preview and get explicit user approval
+    before calling with confirm=true.
+13. Use get_run_status to poll a launched run, then parse_run_summary on its
+    outdir once it completes.
 
 Always validate samplesheets before generating launch commands.
 Always present review_required outputs to the user for confirmation
 before executing any pipeline command. Never silently set an expert_required
-parameter — surface it for a human decision.
+parameter — surface it for a human decision. Never call run_pipeline with
+confirm=true without explicit user approval of the previewed command.
 """,
 )
 
@@ -76,6 +93,10 @@ mcp.tool(configure_parameters)
 mcp.tool(get_parameters)
 mcp.tool(suggest_parameters)
 mcp.tool(generate_launch_command)
+mcp.tool(check_execution_environment)
+mcp.tool(setup_environment)
+mcp.tool(run_pipeline)
+mcp.tool(get_run_status)
 mcp.tool(parse_run_summary)
 
 
