@@ -88,7 +88,10 @@ async def suggest_parameters(
     Always returns review_required=true. Never use suggested parameters without
     human review — they are starting points, not ground truth.
 
-    Requires ANTHROPIC_API_KEY to be set in the environment.
+    If ANTHROPIC_API_KEY is set, the server generates suggestions itself. If not,
+    it degrades gracefully: it returns the parameter schema (schema_summary) and
+    analysis_method="deferred_to_host" so an agent host can do the reasoning with
+    the model already in the loop, rather than failing.
 
     Args:
         pipeline_name: nf-core pipeline name (e.g. "rnaseq").
@@ -119,12 +122,25 @@ async def suggest_parameters(
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
+        # No key, so the server does not call a model itself. Rather than failing,
+        # hand the assembled schema back to the caller: if it is an agent host
+        # (Claude Code, etc.) it can reason over the schema + experiment description
+        # and propose parameters using the model already in the loop.
         return {
-            "error": True,
-            "code": "NO_API_KEY",
+            "pipeline": pipeline_name,
+            "suggested_params": {},
+            "justifications": {},
+            "schema_summary": schema_summary,
+            "experiment_description": experiment_description,
+            "analysis_method": "deferred_to_host",
+            "llm_available": False,
+            "review_required": True,
             "message": (
-                "ANTHROPIC_API_KEY environment variable not set. "
-                "Set it to enable AI-powered parameter suggestions."
+                "No ANTHROPIC_API_KEY is set, so the server did not call a model "
+                "itself. The full parameter schema is in schema_summary — if you are "
+                "an agent host, reason over it together with experiment_description to "
+                "propose parameters, then surface them to the user for review. Set "
+                "ANTHROPIC_API_KEY to have the server generate suggestions standalone."
             ),
         }
 

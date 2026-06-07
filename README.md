@@ -93,6 +93,7 @@ uvx nfcore-mcp
 | `generate_launch_command` | `pipeline_name`, `version`, `profile`, `samplesheet_path`, `outdir`, `params?` | Validated `nextflow run` command string |
 | `check_execution_environment` | `profile?: str` | Probes for Nextflow, Java, and container/conda engines (Docker, Singularity, Apptainer, Podman, Conda, Mamba), checks the Docker daemon, recommends a viable `-profile`, and reports what's missing with install hints |
 | `setup_environment` | `pipeline_name`, `version`, `profile` | Runs `nextflow pull` + `nextflow config` to cache the pipeline and resolve its configuration as a dry run, before any compute is spent |
+| `estimate_resources` | `pipeline_name`, `version`, `samplesheet_path?`, `file_paths?`, `data_summary?`, `profile?` | Sizes the job against this machine *before* launch: derives the workload (sample count + input size) and, with the pipeline's resource profile, proposes CPU/memory/disk/walltime, returns a verdict (`sufficient`/`marginal`/`insufficient`), and suggests `--max_*` overrides. LLM-refined when `ANTHROPIC_API_KEY` is set; otherwise heuristic + raw signals returned for the host agent to reason over |
 | `run_pipeline` | `pipeline_name`, `version`, `profile`, `samplesheet_path`, `outdir`, `params?`, `run_name?`, `confirm: bool` | **Gated.** With `confirm=false` (default) it only previews the validated command and changes nothing. It launches a detached background `nextflow run` only when called with `confirm=true` — which must follow explicit human approval of the preview. Parameters are written to a `-params-file` (more robust than inline flags), and a full provenance manifest is recorded |
 | `get_run_status` | `run_name: str` | Polls a launched run: process liveness, log tail, and a parsed status (`running` / `completed` / `failed` / `unknown`) with suggested next steps |
 | `list_runs` | — | Lists every run launched through the server (newest first), refreshing liveness and resolving terminal status from the log |
@@ -126,6 +127,7 @@ check_feasibility(goal, file_paths)              # match files+goal → candidat
   → generate_launch_command("rnaseq", ...)        # human reviews the command
   → check_execution_environment()                 # confirm Nextflow + a container engine
   → setup_environment("rnaseq", "3.14.0", "docker")
+  → estimate_resources("rnaseq", "3.14.0", ...)   # will this machine cope? size CPU/mem/disk/time
   → run_pipeline(..., confirm=False)              # preview command + params
   → run_pipeline(..., confirm=True)               # human has approved — launch for real
   → get_run_status("myrun")                       # poll until completed/failed
@@ -146,6 +148,7 @@ Tools that generate executable content, propose AI-derived values, or gate compu
 - `configure_parameters` — `expert_required` parameters are *never* silently set; they're always returned for a human decision
 - `suggest_parameters` — AI suggestions need domain expert review
 - `generate_launch_command` — pipelines consume real compute resources
+- `estimate_resources` — a planning estimate, never a guarantee; an `insufficient`/`marginal` verdict should be raised with the user before launching
 - `run_pipeline` — hard-gated behind `confirm=true`; with `confirm=false` it only previews and launches nothing
 - `stop_pipeline` — hard-gated behind `confirm=true`; previews what would be terminated otherwise
 - `diagnose_run_failure` / `diagnose_resume` / `generate_methods_note` — return findings for human review, not automatic action

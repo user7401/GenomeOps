@@ -1242,6 +1242,470 @@ def _compare_fingerprints(recorded: dict[str, dict[str, Any]]) -> list[dict[str,
 
 
 # ===========================================================================
+# Tool 10 — estimate_resources
+# ===========================================================================
+
+# Rough, deliberately conservative resource profiles for common nf-core pipelines.
+#   peak_mem_gb     — memory the single heaviest process typically wants (drives --max_memory)
+#   cores           — a comfortable CPU count for reasonable throughput
+#   disk_mult       — work/ + results size as a multiple of total input size
+#   hours_per_sample — very rough wall-clock per sample at the given core count
+# These are planning heuristics, not benchmarks; the LLM path (and the host agent)
+# can refine them with knowledge of genome size, read depth, and tool choices.
+_PIPELINE_RESOURCE_PROFILES: dict[str, dict[str, Any]] = {
+    "rnaseq":     {"peak_mem_gb": 40, "cores": 12, "disk_mult": 8,  "hours_per_sample": 1.5, "note": "STAR genome index loading dominates memory (~38 GB for human)."},
+    "sarek":      {"peak_mem_gb": 36, "cores": 16, "disk_mult": 12, "hours_per_sample": 6.0, "note": "Variant calling (GATK/BWA) is CPU- and time-heavy; WGS far exceeds WES."},
+    "chipseq":    {"peak_mem_gb": 24, "cores": 8,  "disk_mult": 6,  "hours_per_sample": 1.0, "note": "BWA alignment + peak calling; memory scales with genome size."},
+    "atacseq":    {"peak_mem_gb": 24, "cores": 8,  "disk_mult": 6,  "hours_per_sample": 1.0, "note": "Similar profile to chipseq."},
+    "methylseq":  {"peak_mem_gb": 32, "cores": 12, "disk_mult": 8,  "hours_per_sample": 3.0, "note": "Bisulfite alignment (Bismark) is memory- and time-intensive."},
+    "viralrecon": {"peak_mem_gb": 12, "cores": 6,  "disk_mult": 4,  "hours_per_sample": 0.5, "note": "Small viral genomes; light compared to human pipelines."},
+    "scrnaseq":   {"peak_mem_gb": 32, "cores": 12, "disk_mult": 6,  "hours_per_sample": 2.0, "note": "Single-cell alignment/quantification; memory scales with the index."},
+    "taxprofiler":{"peak_mem_gb": 48, "cores": 16, "disk_mult": 5,  "hours_per_sample": 2.0, "note": "Large reference databases can dominate memory (often >40 GB)."},
+    "mag":        {"peak_mem_gb": 64, "cores": 16, "disk_mult": 15, "hours_per_sample": 8.0, "note": "Metagenome assembly is extremely memory- and disk-hungry."},
+}
+
+_DEFAULT_RESOURCE_PROFILE = {
+    "peak_mem_gb": 32, "cores": 8, "disk_mult": 8, "hours_per_sample": 2.0,
+    "note": "No specific profile for this pipeline; using conservative generic defaults.",
+}
+
+
+async def estimate_resources(
+    pipeline_name: str,
+    version: str,
+    samplesheet_path: str | None = None,
+    file_paths: list[str] | None = None,
+    data_summary: dict[str, Any] | None = None,
+    profile: str | None = None,
+) -> dict[str, Any]:
+    """Estimate the compute a run will need, and judge whether this machine can take it.
+
+    Bridges check_execution_environment (what the machine HAS) and run_pipeline
+    (what the job NEEDS). From the workload — sample count and total input size,
+    drawn from the samplesheet, raw file_paths, or a data_summary — plus the
+    pipeline's known resource profile, it proposes rough CPU / memory / disk /
+    walltime figures, compares them against the detected machine, and returns a
+    verdict (sufficient / marginal / insufficient) with concrete nf-core
+    --max_cpus/--max_memory/--max_time overrides sized to what's actually available.
+
+    Resource needs are highly data-dependent, so this is a planning aid, never a
+    guarantee — review_required is always true. When ANTHROPIC_API_KEY is set the
+    estimate is refined by an LLM; otherwise a heuristic is used. Either way the
+    raw evidence is returned in reasoning_inputs so an agent host can reason itself.
+
+    Run this after check_execution_environment and before setup_environment.
+
+    Args:
+        pipeline_name: nf-core pipeline name (e.g. "rnaseq").
+        version: Pinned release tag (e.g. "3.14.0").
+        samplesheet_path: Optional path to the samplesheet — rows are counted and
+            referenced local files are sized.
+        file_paths: Optional raw input file paths to size, if no samplesheet yet.
+        data_summary: Optional pre-computed summary (e.g. from check_feasibility):
+            may include sample_count, paired_end, total_input_gb.
+        profile: Optional execution profile (informational).
+
+    Returns:
+        {
+          "pipeline","version",
+          "input_signals": {"sample_count","total_input_gb","paired_end","source"},
+          "detected_machine": {"cpu_count","total_memory_gb","available_memory_gb","disk_free_gb"},
+          "estimated_requirements": {"recommended_cpus","recommended_memory_gb",
+              "estimated_peak_memory_gb","estimated_disk_gb","estimated_walltime_hours","basis"},
+          "machine_verdict": "sufficient"|"marginal"|"insufficient",
+          "verdict_reasons": [str],
+          "suggested_overrides": {"--max_cpus","--max_memory","--max_time"},
+          "analysis_method": "llm"|"heuristic",
+          "confidence": "low"|"medium"|"high",
+          "caveats": [str],
+          "reasoning_inputs": {...},
+          "review_required": true
+        }
+    """
+    logger.info("Tool call: estimate_resources(%r, %r)", pipeline_name, version)
+
+    signals = _gather_input_signals(samplesheet_path, file_paths, data_summary)
+    machine = _probe_machine()
+
+    estimate = _heuristic_estimate(pipeline_name, signals, machine)
+    verdict, reasons = _machine_verdict(estimate, machine)
+    overrides = _suggest_overrides(estimate, machine)
+    method = "heuristic"
+    confidence = "low"
+
+    caveats = [
+        "Resource needs are highly data-dependent (genome size, read depth, sample "
+        "heterogeneity); treat these as planning estimates, not guarantees.",
+        "Estimates assume a single pipeline run on this machine with no competing workloads.",
+    ]
+    if signals.get("total_input_gb") is None:
+        caveats.append(
+            "Total input size could not be measured (no readable local files); "
+            "disk and walltime estimates are especially rough."
+        )
+    if signals.get("sample_count") is None:
+        caveats.append(
+            "Sample count is unknown; walltime scales with sample count, so the "
+            "runtime figure assumes a single sample."
+        )
+
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        refined = await _llm_estimate(pipeline_name, version, signals, machine, estimate)
+        if refined is not None:
+            estimate = refined.get("estimated_requirements", estimate) or estimate
+            verdict = refined.get("machine_verdict", verdict)
+            reasons = refined.get("verdict_reasons", reasons) or reasons
+            overrides = refined.get("suggested_overrides", overrides) or overrides
+            confidence = refined.get("confidence", "medium")
+            extra = refined.get("caveats")
+            if isinstance(extra, list):
+                caveats.extend(c for c in extra if c not in caveats)
+            method = "llm"
+
+    return {
+        "pipeline": pipeline_name,
+        "version": version,
+        "input_signals": signals,
+        "detected_machine": machine,
+        "estimated_requirements": estimate,
+        "machine_verdict": verdict,
+        "verdict_reasons": reasons,
+        "suggested_overrides": overrides,
+        "analysis_method": method,
+        "confidence": confidence,
+        "caveats": caveats,
+        # Evidence block: lets an agent host do its own scaling reasoning even when
+        # no ANTHROPIC_API_KEY is set and only the heuristic ran server-side.
+        "reasoning_inputs": {
+            "pipeline": pipeline_name,
+            "version": version,
+            "input_signals": signals,
+            "detected_machine": machine,
+            "pipeline_profile": _PIPELINE_RESOURCE_PROFILES.get(
+                pipeline_name.lower(), _DEFAULT_RESOURCE_PROFILE
+            ),
+        },
+        "review_required": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Resource estimation helpers
+# ---------------------------------------------------------------------------
+
+def _probe_machine() -> dict[str, Any]:
+    """Detect this machine's CPU count, total/available memory, and free disk.
+
+    Best-effort and never raises; any field that can't be determined is None.
+    """
+    cpu = os.cpu_count() or 1
+
+    total_mem_gb: float | None = None
+    try:
+        page = os.sysconf("SC_PAGE_SIZE")
+        phys = os.sysconf("SC_PHYS_PAGES")
+        total_mem_gb = round(page * phys / 1e9, 1)
+    except (ValueError, OSError, AttributeError):
+        pass
+
+    avail_mem_gb: float | None = None
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                avail_mem_gb = round(int(line.split()[1]) / 1e6, 1)  # kB → GB
+                break
+    except (OSError, ValueError, IndexError):
+        pass
+    if avail_mem_gb is None:
+        try:
+            page = os.sysconf("SC_PAGE_SIZE")
+            avail = os.sysconf("SC_AVPHYS_PAGES")
+            avail_mem_gb = round(page * avail / 1e9, 1)
+        except (ValueError, OSError, AttributeError):
+            pass
+
+    disk_free_gb: float | None = None
+    try:
+        disk_free_gb = round(shutil.disk_usage(Path.cwd()).free / 1e9, 1)
+    except OSError:
+        pass
+
+    return {
+        "cpu_count": cpu,
+        "total_memory_gb": total_mem_gb,
+        "available_memory_gb": avail_mem_gb,
+        "disk_free_gb": disk_free_gb,
+    }
+
+
+def _scan_samplesheet_inputs(samplesheet_path: str) -> tuple[int | None, int]:
+    """Return (data_row_count, total_bytes_of_referenced_local_files) from a samplesheet."""
+    try:
+        text = Path(samplesheet_path).read_text(errors="replace")
+    except OSError:
+        return None, 0
+
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    row_count = max(len(lines) - 1, 0) if lines else 0  # minus the header row
+
+    total_bytes = 0
+    for cell in re.split(r"[,\t\n\r]+", text):
+        cell = cell.strip().strip('"').strip("'")
+        if not cell or "://" in cell:
+            continue
+        if ("/" in cell or "." in cell) and Path(cell).is_file():
+            fp = _fingerprint_file(cell)
+            if fp:
+                total_bytes += fp["size"]
+    return (row_count or None), total_bytes
+
+
+def _gather_input_signals(
+    samplesheet_path: str | None,
+    file_paths: list[str] | None,
+    data_summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Derive sample_count / total_input_gb / paired_end from whatever was provided."""
+    signals: dict[str, Any] = {
+        "sample_count": None,
+        "total_input_gb": None,
+        "paired_end": None,
+        "source": None,
+    }
+
+    # 1. An explicit data_summary (e.g. from check_feasibility) is authoritative.
+    if data_summary:
+        if data_summary.get("sample_count") is not None:
+            signals["sample_count"] = data_summary.get("sample_count")
+        if data_summary.get("paired_end") is not None:
+            signals["paired_end"] = data_summary.get("paired_end")
+        if data_summary.get("total_input_gb") is not None:
+            signals["total_input_gb"] = data_summary.get("total_input_gb")
+        signals["source"] = "data_summary"
+
+    # 2. The samplesheet: count rows and size the local files it references.
+    if samplesheet_path and Path(samplesheet_path).is_file():
+        rows, total_bytes = _scan_samplesheet_inputs(samplesheet_path)
+        if signals["sample_count"] is None and rows is not None:
+            signals["sample_count"] = rows
+        if signals["total_input_gb"] is None and total_bytes:
+            signals["total_input_gb"] = round(total_bytes / 1e9, 2)
+        signals["source"] = signals["source"] or "samplesheet"
+
+    # 3. Raw file paths, if neither of the above gave us a size.
+    if file_paths:
+        total_bytes = 0
+        found = False
+        for p in file_paths:
+            fp = _fingerprint_file(p)
+            if fp:
+                total_bytes += fp["size"]
+                found = True
+        if signals["total_input_gb"] is None and found:
+            signals["total_input_gb"] = round(total_bytes / 1e9, 2)
+        signals["source"] = signals["source"] or "file_paths"
+
+    return signals
+
+
+def _heuristic_estimate(
+    pipeline_name: str,
+    signals: dict[str, Any],
+    machine: dict[str, Any],
+) -> dict[str, Any]:
+    """Rough resource requirements from the pipeline profile + input signals."""
+    profile = _PIPELINE_RESOURCE_PROFILES.get(
+        pipeline_name.lower(), _DEFAULT_RESOURCE_PROFILE
+    )
+    sample_count = signals.get("sample_count") or 1
+    total_input_gb = signals.get("total_input_gb")
+
+    rec_mem = profile["peak_mem_gb"]
+    rec_cpus = profile["cores"]
+
+    est_disk: float | None = None
+    if total_input_gb:
+        est_disk = max(round(total_input_gb * profile["disk_mult"], 1), 10.0)
+
+    # Walltime: samples run with some parallelism, limited by available cores.
+    per_sample_cores = 4
+    usable_cpus = machine.get("cpu_count") or rec_cpus
+    parallel = max(1, min(sample_count, max(usable_cpus // per_sample_cores, 1)))
+    est_hours = round(profile["hours_per_sample"] * sample_count / parallel, 1)
+
+    return {
+        "recommended_cpus": rec_cpus,
+        "recommended_memory_gb": rec_mem,
+        "estimated_peak_memory_gb": rec_mem,
+        "estimated_disk_gb": est_disk,
+        "estimated_walltime_hours": est_hours,
+        "basis": profile["note"],
+    }
+
+
+def _machine_verdict(
+    estimate: dict[str, Any],
+    machine: dict[str, Any],
+) -> tuple[str, list[str]]:
+    """Compare the estimate against the detected machine. Returns (verdict, reasons)."""
+    reasons: list[str] = []
+    verdict = "sufficient"
+
+    def _downgrade(to: str) -> None:
+        nonlocal verdict
+        order = {"sufficient": 0, "marginal": 1, "insufficient": 2}
+        if order[to] > order[verdict]:
+            verdict = to
+
+    mem = machine.get("total_memory_gb")
+    cpus = machine.get("cpu_count")
+    disk = machine.get("disk_free_gb")
+    need_mem = estimate.get("recommended_memory_gb")
+    need_cpu = estimate.get("recommended_cpus")
+    need_disk = estimate.get("estimated_disk_gb")
+
+    if mem is not None and need_mem is not None:
+        if mem < need_mem:
+            _downgrade("insufficient")
+            reasons.append(
+                f"Detected {mem} GB RAM but the heaviest process typically wants "
+                f"~{need_mem} GB — high risk of OOM kills (exit 137)."
+            )
+        elif mem < need_mem * 1.25:
+            _downgrade("marginal")
+            reasons.append(
+                f"{mem} GB RAM is close to the ~{need_mem} GB peak need; expect "
+                f"swapping or occasional OOM under load."
+            )
+
+    if cpus is not None and need_cpu is not None:
+        if cpus < need_cpu / 2:
+            _downgrade("marginal")
+            reasons.append(
+                f"Only {cpus} cores detected vs a recommended ~{need_cpu}; "
+                f"runtime will be substantially longer."
+            )
+
+    if disk is not None and need_disk is not None:
+        if disk < need_disk:
+            _downgrade("insufficient")
+            reasons.append(
+                f"Only {disk} GB free disk but ~{need_disk} GB may be needed for "
+                f"work/ + results — risk of 'no space left on device'."
+            )
+        elif disk < need_disk * 1.5:
+            _downgrade("marginal")
+            reasons.append(
+                f"{disk} GB free disk is tight against an estimated ~{need_disk} GB need."
+            )
+
+    if verdict == "sufficient":
+        reasons.append("Detected resources meet the estimated requirements with headroom.")
+    return verdict, reasons
+
+
+def _suggest_overrides(
+    estimate: dict[str, Any],
+    machine: dict[str, Any],
+) -> dict[str, Any]:
+    """nf-core --max_* caps sized to what the machine can actually offer."""
+    overrides: dict[str, Any] = {}
+    cpus = machine.get("cpu_count")
+    mem = machine.get("total_memory_gb")
+
+    if cpus:
+        overrides["--max_cpus"] = cpus
+    if mem:
+        # Leave ~15% headroom for the OS and Nextflow itself.
+        overrides["--max_memory"] = f"{max(int(mem * 0.85), 1)}.GB"
+    walltime = estimate.get("estimated_walltime_hours")
+    if walltime:
+        # Give generous slack (2x) so a slightly-slow run isn't killed.
+        overrides["--max_time"] = f"{max(int(walltime * 2), 1)}.h"
+    return overrides
+
+
+async def _llm_estimate(
+    pipeline_name: str,
+    version: str,
+    signals: dict[str, Any],
+    machine: dict[str, Any],
+    heuristic: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Refine the resource estimate via Claude. Returns None on any failure."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        return None
+
+    prompt = f"""You are an HPC and bioinformatics resource-planning expert. Estimate the
+compute resources an nf-core pipeline run will need, and judge whether the detected
+machine can handle it.
+
+Pipeline: nf-core/{pipeline_name} (version {version})
+
+Workload signals:
+- Sample count: {signals.get('sample_count')}
+- Total input size (GB): {signals.get('total_input_gb')}
+- Paired-end: {signals.get('paired_end')}
+
+Detected machine:
+- CPU cores: {machine.get('cpu_count')}
+- Total RAM (GB): {machine.get('total_memory_gb')}
+- Available RAM (GB): {machine.get('available_memory_gb')}
+- Free disk (GB): {machine.get('disk_free_gb')}
+
+A heuristic baseline (refine or correct it using your knowledge of this pipeline's
+heaviest steps, genome size, and read-depth scaling):
+{heuristic}
+
+Reason about the pipeline's heaviest process (e.g. genome index loading, assembly,
+variant calling), how runtime scales with sample count and read depth, and how
+work-directory disk usage relates to input size. Then give a verdict.
+
+Respond with ONLY valid JSON:
+{{
+  "estimated_requirements": {{
+    "recommended_cpus": <int>,
+    "recommended_memory_gb": <int>,
+    "estimated_peak_memory_gb": <int>,
+    "estimated_disk_gb": <number or null>,
+    "estimated_walltime_hours": <number>,
+    "basis": "<one sentence on what drives the estimate>"
+  }},
+  "machine_verdict": "sufficient|marginal|insufficient",
+  "verdict_reasons": ["<reason>", "..."],
+  "suggested_overrides": {{"--max_cpus": <int>, "--max_memory": "<N>.GB", "--max_time": "<N>.h"}},
+  "confidence": "low|medium|high",
+  "caveats": ["<caveat>", "..."]
+}}"""
+
+    try:
+        import json as _json
+        client = anthropic.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = message.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed = _json.loads(raw.strip())
+        if parsed.get("machine_verdict") not in ("sufficient", "marginal", "insufficient"):
+            return None
+        return parsed
+    except Exception as exc:  # noqa: BLE001 — degrade gracefully to heuristic
+        logger.warning("LLM resource estimate failed for %s: %s", pipeline_name, exc)
+        return None
+
+
+# ===========================================================================
 # Subprocess helpers (monkeypatched in tests)
 # ===========================================================================
 

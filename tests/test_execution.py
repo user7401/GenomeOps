@@ -781,3 +781,209 @@ async def test_diagnose_resume_flags_missing_cache_and_changed_input(tmp_path, r
     assert any(c["path"] == str(ss) for c in result["changed_inputs"])
     assert result["resume_will_reuse_cache"] is False
     assert result["issues"]
+
+
+# ---------------------------------------------------------------------------
+# estimate_resources
+# ---------------------------------------------------------------------------
+
+from nfcore_mcp.tools.execution import (
+    estimate_resources,
+    _gather_input_signals,
+    _scan_samplesheet_inputs,
+    _heuristic_estimate,
+    _machine_verdict,
+    _suggest_overrides,
+    _probe_machine,
+)
+
+
+def test_probe_machine_reports_cpu_and_never_raises():
+    m = _probe_machine()
+    assert m["cpu_count"] >= 1
+    # memory/disk may be None on exotic platforms, but the keys are always present
+    assert "total_memory_gb" in m
+    assert "available_memory_gb" in m
+    assert "disk_free_gb" in m
+
+
+def test_scan_samplesheet_counts_rows_and_sizes_files(tmp_path):
+    r1 = tmp_path / "S1_R1.fastq.gz"
+    r1.write_bytes(b"x" * 1000)
+    r2 = tmp_path / "S2_R1.fastq.gz"
+    r2.write_bytes(b"y" * 2000)
+    ss = tmp_path / "samplesheet.csv"
+    ss.write_text(f"sample,fastq_1\nS1,{r1}\nS2,{r2}\n")
+
+    rows, total_bytes = _scan_samplesheet_inputs(str(ss))
+    assert rows == 2
+    assert total_bytes == 3000
+
+
+def test_gather_input_signals_prefers_data_summary(tmp_path):
+    signals = _gather_input_signals(
+        samplesheet_path=None,
+        file_paths=None,
+        data_summary={"sample_count": 8, "paired_end": True, "total_input_gb": 12.5},
+    )
+    assert signals["sample_count"] == 8
+    assert signals["paired_end"] is True
+    assert signals["total_input_gb"] == 12.5
+    assert signals["source"] == "data_summary"
+
+
+def test_gather_input_signals_from_samplesheet(tmp_path):
+    r1 = tmp_path / "a.fastq.gz"
+    r1.write_bytes(b"z" * 5_000_000)
+    ss = tmp_path / "ss.csv"
+    ss.write_text(f"sample,fastq_1\nS1,{r1}\n")
+
+    signals = _gather_input_signals(str(ss), None, None)
+    assert signals["sample_count"] == 1
+    assert signals["total_input_gb"] == round(5_000_000 / 1e9, 2)
+    assert signals["source"] == "samplesheet"
+
+
+def test_heuristic_estimate_uses_pipeline_profile():
+    machine = {"cpu_count": 8, "total_memory_gb": 64, "disk_free_gb": 500}
+    signals = {"sample_count": 4, "total_input_gb": 10, "paired_end": True}
+    est = _heuristic_estimate("rnaseq", signals, machine)
+    assert est["recommended_memory_gb"] == 40  # rnaseq profile peak
+    assert est["recommended_cpus"] == 12
+    assert est["estimated_disk_gb"] == 80.0  # 10 GB * disk_mult 8
+    assert est["estimated_walltime_hours"] > 0
+
+
+def test_heuristic_estimate_unknown_pipeline_uses_default():
+    machine = {"cpu_count": 4, "total_memory_gb": 16, "disk_free_gb": 100}
+    est = _heuristic_estimate("totallymadeup", {"sample_count": 1}, machine)
+    assert est["recommended_memory_gb"] == 32  # default profile
+    assert est["estimated_disk_gb"] is None  # no input size known
+
+
+def test_machine_verdict_insufficient_memory():
+    estimate = {"recommended_cpus": 12, "recommended_memory_gb": 40, "estimated_disk_gb": 50}
+    machine = {"cpu_count": 8, "total_memory_gb": 16, "disk_free_gb": 500}
+    verdict, reasons = _machine_verdict(estimate, machine)
+    assert verdict == "insufficient"
+    assert any("RAM" in r for r in reasons)
+
+
+def test_machine_verdict_sufficient():
+    estimate = {"recommended_cpus": 8, "recommended_memory_gb": 16, "estimated_disk_gb": 50}
+    machine = {"cpu_count": 16, "total_memory_gb": 64, "disk_free_gb": 500}
+    verdict, reasons = _machine_verdict(estimate, machine)
+    assert verdict == "sufficient"
+    assert reasons
+
+
+def test_machine_verdict_insufficient_disk_overrides_marginal():
+    estimate = {"recommended_cpus": 8, "recommended_memory_gb": 16, "estimated_disk_gb": 1000}
+    machine = {"cpu_count": 3, "total_memory_gb": 18, "disk_free_gb": 50}
+    verdict, reasons = _machine_verdict(estimate, machine)
+    assert verdict == "insufficient"  # disk shortfall wins over a marginal cpu/mem
+
+
+def test_suggest_overrides_caps_to_machine():
+    estimate = {"estimated_walltime_hours": 5}
+    machine = {"cpu_count": 8, "total_memory_gb": 32}
+    ov = _suggest_overrides(estimate, machine)
+    assert ov["--max_cpus"] == 8
+    assert ov["--max_memory"] == "27.GB"  # int(32 * 0.85)
+    assert ov["--max_time"] == "10.h"  # 5h * 2
+
+
+@pytest.mark.asyncio
+async def test_estimate_resources_heuristic_end_to_end(monkeypatch, tmp_path):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(execution, "_probe_machine", lambda: {
+        "cpu_count": 4, "total_memory_gb": 8, "available_memory_gb": 6, "disk_free_gb": 40,
+    })
+    result = await estimate_resources(
+        "rnaseq", "3.14.0",
+        data_summary={"sample_count": 6, "total_input_gb": 20, "paired_end": True},
+    )
+    assert result["analysis_method"] == "heuristic"
+    assert result["machine_verdict"] == "insufficient"  # 8 GB << 40 GB rnaseq peak
+    assert result["estimated_requirements"]["recommended_memory_gb"] == 40
+    assert "--max_cpus" in result["suggested_overrides"]
+    assert result["review_required"] is True
+    assert result["confidence"] == "low"
+    # Evidence block is present for host-agent reasoning even without a key.
+    assert result["reasoning_inputs"]["detected_machine"]["cpu_count"] == 4
+    assert result["reasoning_inputs"]["pipeline_profile"]["peak_mem_gb"] == 40
+
+
+@pytest.mark.asyncio
+async def test_estimate_resources_caveats_when_no_size(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    result = await estimate_resources("rnaseq", "3.14.0")
+    # No samplesheet, files, or data_summary → size and sample count unknown
+    assert any("input size" in c.lower() for c in result["caveats"])
+    assert any("sample count" in c.lower() for c in result["caveats"])
+
+
+@pytest.mark.asyncio
+async def test_estimate_resources_llm_refines(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(execution, "_probe_machine", lambda: {
+        "cpu_count": 32, "total_memory_gb": 128, "available_memory_gb": 120, "disk_free_gb": 2000,
+    })
+
+    payload = json.dumps({
+        "estimated_requirements": {
+            "recommended_cpus": 24, "recommended_memory_gb": 64,
+            "estimated_peak_memory_gb": 64, "estimated_disk_gb": 300,
+            "estimated_walltime_hours": 8, "basis": "LLM reasoning",
+        },
+        "machine_verdict": "sufficient",
+        "verdict_reasons": ["plenty of headroom"],
+        "suggested_overrides": {"--max_cpus": 32, "--max_memory": "110.GB", "--max_time": "16.h"},
+        "confidence": "high",
+        "caveats": ["depth assumed ~30x"],
+    })
+
+    class _Msg:
+        def __init__(self, text):
+            self.content = [type("C", (), {"text": text})()]
+
+    class _Client:
+        def __init__(self, *a, **k):
+            self.messages = self
+
+        def create(self, *a, **k):
+            return _Msg(payload)
+
+    import anthropic
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+
+    result = await estimate_resources(
+        "sarek", "3.4.4", data_summary={"sample_count": 4, "total_input_gb": 30}
+    )
+    assert result["analysis_method"] == "llm"
+    assert result["machine_verdict"] == "sufficient"
+    assert result["estimated_requirements"]["basis"] == "LLM reasoning"
+    assert result["confidence"] == "high"
+    assert "depth assumed ~30x" in result["caveats"]
+
+
+@pytest.mark.asyncio
+async def test_estimate_resources_llm_invalid_falls_back(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    class _Msg:
+        def __init__(self, text):
+            self.content = [type("C", (), {"text": text})()]
+
+    class _Client:
+        def __init__(self, *a, **k):
+            self.messages = self
+
+        def create(self, *a, **k):
+            return _Msg("not json at all")
+
+    import anthropic
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+
+    result = await estimate_resources("rnaseq", "3.14.0", data_summary={"sample_count": 1})
+    assert result["analysis_method"] == "heuristic"  # degraded gracefully

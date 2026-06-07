@@ -19,6 +19,7 @@ from nfcore_mcp.tools.results import generate_launch_command, parse_run_summary
 from nfcore_mcp.tools.execution import (
     check_execution_environment,
     setup_environment,
+    estimate_resources,
     run_pipeline,
     get_run_status,
     list_runs,
@@ -71,6 +72,12 @@ Typical workflow:
     environments automatically; the user does NOT set up conda per tool.
 11. Use setup_environment to cache the pipeline and resolve its config (a dry
     run) before spending compute.
+11b. Use estimate_resources to size the job against this machine BEFORE launching:
+    it proposes CPU/memory/disk/walltime from the workload + pipeline profile,
+    returns a verdict (sufficient/marginal/insufficient), and suggests --max_*
+    overrides. If the verdict is marginal/insufficient, surface it to the user
+    before run_pipeline. With no ANTHROPIC_API_KEY it returns a heuristic plus the
+    raw signals in reasoning_inputs for you to reason over yourself.
 12. Use run_pipeline to launch the analysis. It is gated: with confirm=false it
     only previews the validated command; it runs ONLY with confirm=true, which
     consumes compute. Always show the preview and get explicit user approval
@@ -109,6 +116,7 @@ mcp.tool(suggest_parameters)
 mcp.tool(generate_launch_command)
 mcp.tool(check_execution_environment)
 mcp.tool(setup_environment)
+mcp.tool(estimate_resources)
 mcp.tool(run_pipeline)
 mcp.tool(get_run_status)
 mcp.tool(list_runs)
