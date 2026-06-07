@@ -323,25 +323,41 @@ async def run_pipeline(
         }
 
     if not confirm:
+        preview_name = run_name or _default_run_name(pipeline_name)
+        merged_params = _build_params(samplesheet_path, outdir, params)
+        preview_args = _build_exec_args(
+            pipeline_name, version, profile, preview_name,
+            _RUNS_DIR / f"{preview_name}.params.json", resume,
+        )
         return {
             "requires_confirmation": True,
-            "command": command,
+            "command": _display_command(preview_args),
+            "readable_command": command,
+            "params_preview": merged_params,
             "environment_ready": True,
             "message": (
                 "Environment is ready and the command is valid, but nothing has run. "
-                "Review the command, then call run_pipeline again with confirm=true to launch. "
-                "This will consume compute resources."
+                "Review the command AND the parameter values in params_preview "
+                "(these will be written to a -params-file), then call run_pipeline "
+                "again with confirm=true to launch. This will consume compute resources."
             ),
             "review_required": True,
         }
 
     # --- Launch ---
     name = run_name or _default_run_name(pipeline_name)
-    args = _build_exec_args(
-        pipeline_name, version, profile, samplesheet_path, outdir, params, name, resume
-    )
-
     _RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Write all run parameters to a -params-file (JSON). This is more robust than
+    # a long --flag value chain: it avoids shell-escaping bugs, handles complex
+    # values (lists, nested objects), and leaves a clean, reviewable artifact.
+    merged_params = _build_params(samplesheet_path, outdir, params)
+    params_file = _RUNS_DIR / f"{name}.params.json"
+    _write_params_file(merged_params, params_file)
+
+    args = _build_exec_args(
+        pipeline_name, version, profile, name, params_file, resume
+    )
     log_path = _RUNS_DIR / f"{name}.log"
 
     try:
@@ -357,15 +373,30 @@ async def run_pipeline(
     meta = {
         "run_name": name,
         "pid": pid,
-        "command": command,
+        "command": _display_command(args),
+        "readable_command": command,
         "args": args,
+        "params": merged_params,
+        "params_file": str(params_file),
+        "samplesheet_path": samplesheet_path,
         "outdir": outdir,
         "log_file": str(log_path),
         "status": "running",
+        "resume": resume,
+        # Resume baseline: where it launched (cache/work live here) and a
+        # fingerprint of every input file, so diagnose_resume can later tell
+        # whether -resume will actually reuse cached work.
+        "launch_dir": work_dir or os.getcwd(),
+        "input_fingerprints": _fingerprint_inputs(samplesheet_path),
         "started_at": time.time(),
         "pipeline": pipeline_name,
         "version": version,
         "profile": profile,
+        # Provenance: record that this run was launched by an agent via this MCP
+        # server with explicit human confirmation (nf-core asks for AI transparency).
+        "launched_with": "nfcore-mcp",
+        "confirmed": True,
+        "engine_versions": _engine_versions(env),
     }
     _save_run(name, meta)
 
@@ -374,8 +405,9 @@ async def run_pipeline(
         "status": "launched",
         "pid": pid,
         "log_file": str(log_path),
+        "params_file": str(params_file),
         "outdir": outdir,
-        "command": command,
+        "command": _display_command(args),
         "monitor_with": f"get_run_status('{name}')",
         "review_required": True,
     }
@@ -457,6 +489,759 @@ async def get_run_status(run_name: str) -> dict[str, Any]:
 
 
 # ===========================================================================
+# Tool 5 — generate_methods_note
+# ===========================================================================
+
+# Stable, canonical citations for the framework and engine every nf-core run uses.
+_NFCORE_CITATION = {
+    "tool": "nf-core",
+    "citation": (
+        "Ewels PA, Peltzer A, Fillinger S, et al. The nf-core framework for "
+        "community-curated bioinformatics pipelines. Nat Biotechnol. "
+        "2020;38(3):276-278."
+    ),
+    "doi": "10.1038/s41587-020-0439-x",
+}
+_NEXTFLOW_CITATION = {
+    "tool": "Nextflow",
+    "citation": (
+        "Di Tommaso P, Chatzou M, Floden EW, et al. Nextflow enables reproducible "
+        "computational workflows. Nat Biotechnol. 2017;35(4):316-319."
+    ),
+    "doi": "10.1038/nbt.3820",
+}
+
+_DEV_VERSION_RE = re.compile(r"(dev|alpha|beta|rc\d*)", re.IGNORECASE)
+
+
+async def generate_methods_note(run_name: str) -> dict[str, Any]:
+    """Draft a publication-ready Methods paragraph from a run's provenance record.
+
+    Turns the recorded run manifest (pipeline, pinned version, profile, exact
+    parameters, tool versions) into a citable Methods note, plus the canonical
+    references for nf-core and Nextflow and a pointer to the pipeline's Zenodo DOI.
+    Deterministic — built from the recorded facts, not generated freehand — so it
+    is auditable and reproducible. If the run's output directory is available, a
+    short QC sentence (sample count, flagged samples) is folded in.
+
+    Run this after a run completes to document exactly what was done.
+
+    Args:
+        run_name: The run_name returned by run_pipeline.
+
+    Returns:
+        {
+          "run_name","methods_text": str,
+          "citations": [{"tool","citation","doi"}],
+          "parameters_used": {param: value},
+          "tool_versions": {tool: version},
+          "warnings": [str],
+          "review_required": true
+        }
+    """
+    logger.info("Tool call: generate_methods_note(%r)", run_name)
+
+    meta = _load_run(run_name)
+    if meta is None:
+        return {
+            "error": True,
+            "code": "RUN_NOT_FOUND",
+            "message": f"No run named '{run_name}' is tracked. It may not have been launched here.",
+        }
+
+    pipeline = meta.get("pipeline", "unknown")
+    version = meta.get("version", "unknown")
+    profile = meta.get("profile", "unknown")
+    params: dict[str, Any] = meta.get("params", {})
+    tool_versions: dict[str, Any] = meta.get("engine_versions", {})
+
+    # Parameters worth reporting: everything except the bare I/O paths.
+    reported = {k: v for k, v in params.items() if k not in ("input", "outdir")}
+
+    warnings: list[str] = []
+    if version in ("master", "main", "unknown"):
+        warnings.append(
+            f"This run used '{version}' rather than a pinned release tag — results "
+            f"may not be reproducible. Re-run against a fixed version for publication."
+        )
+    elif _DEV_VERSION_RE.search(version):
+        warnings.append(
+            f"Version '{version}' is a development/pre-release; cite with caution."
+        )
+
+    # Best-effort QC sentence from the output directory.
+    qc_sentence = ""
+    outdir = meta.get("outdir")
+    if outdir:
+        try:
+            from nfcore_mcp.tools.results import parse_run_summary
+            summary = await parse_run_summary(outdir)
+            if summary.get("summary_available"):
+                n = len(summary.get("samples", []))
+                flagged = summary.get("flagged_samples", [])
+                qc_sentence = f" Quality control was assessed for {n} sample(s) using MultiQC"
+                if flagged:
+                    qc_sentence += f"; {len(flagged)} sample(s) were flagged for review"
+                qc_sentence += "."
+        except Exception as exc:  # noqa: BLE001 — QC is optional enrichment
+            logger.debug("parse_run_summary unavailable for methods note: %s", exc)
+
+    # --- Compose the paragraph from recorded facts ---
+    nf_version = tool_versions.get("nextflow")
+    engine_clause = f"Nextflow v{nf_version} [2]" if nf_version else "Nextflow [2]"
+
+    sentences = [
+        f"Sequencing data were processed with the nf-core/{pipeline} pipeline "
+        f"(version {version}) [1], implemented in {engine_clause}."
+    ]
+    sentences.append(
+        f"The pipeline was executed with the '{profile}' configuration profile, "
+        f"which provisions all per-process software environments automatically."
+    )
+    if reported:
+        param_str = ", ".join(f"--{k} {v}" for k, v in reported.items())
+        sentences.append(f"Non-default parameters were: {param_str}.")
+    else:
+        sentences.append("All parameters were left at the pipeline defaults.")
+    if qc_sentence:
+        sentences.append(qc_sentence.strip())
+    sentences.append(
+        "This analysis was launched via the nfcore-mcp agent tooling with explicit "
+        "user confirmation; the complete parameter set is recorded in the run's "
+        "params file for reproducibility."
+    )
+
+    methods_text = " ".join(sentences)
+
+    citations = [
+        {**_NFCORE_CITATION},
+        {**_NEXTFLOW_CITATION},
+        {
+            "tool": f"nf-core/{pipeline}",
+            "citation": (
+                f"nf-core/{pipeline} pipeline, version {version}. "
+                f"Each release is archived with a Zenodo DOI — see "
+                f"https://nf-co.re/{pipeline} for the exact citation."
+            ),
+            "doi": None,
+        },
+    ]
+
+    return {
+        "run_name": run_name,
+        "methods_text": methods_text,
+        "citations": citations,
+        "parameters_used": reported,
+        "tool_versions": tool_versions,
+        "warnings": warnings,
+        "review_required": True,
+    }
+
+
+# ===========================================================================
+# Tool 6 — list_runs
+# ===========================================================================
+
+async def list_runs() -> dict[str, Any]:
+    """List every pipeline run launched through this server, newest first.
+
+    Reads the local run registry. For runs still marked "running", liveness is
+    re-checked: if the process has exited, its terminal status (completed/failed)
+    is resolved from the log and persisted. Use this to find a run_name to pass to
+    get_run_status, generate_methods_note, diagnose_run_failure, or stop_pipeline.
+
+    Returns:
+        {
+          "runs": [{"run_name","pipeline","version","profile","status",
+                    "alive","outdir","started_at","log_file"}],
+          "total": int
+        }
+    """
+    logger.info("Tool call: list_runs()")
+    _RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+    runs: list[dict[str, Any]] = []
+    for path in _RUNS_DIR.glob("*.json"):
+        if path.name.endswith(".params.json"):
+            continue
+        try:
+            meta = json.loads(path.read_text())
+        except Exception:
+            continue
+
+        status = meta.get("status", "unknown")
+        alive: bool | None = None
+        if status == "running":
+            alive = _pid_alive(meta.get("pid", 0))
+            if not alive:
+                log_path = Path(meta.get("log_file", ""))
+                log_text = log_path.read_text(errors="replace") if log_path.exists() else ""
+                status = _scan_log_for_status(log_text)
+                if status in ("completed", "failed"):
+                    meta["status"] = status
+                    meta["ended_at"] = time.time()
+                    _save_run(meta["run_name"], meta)
+
+        runs.append({
+            "run_name": meta.get("run_name"),
+            "pipeline": meta.get("pipeline"),
+            "version": meta.get("version"),
+            "profile": meta.get("profile"),
+            "status": status,
+            "alive": alive,
+            "outdir": meta.get("outdir"),
+            "started_at": meta.get("started_at"),
+            "log_file": meta.get("log_file"),
+        })
+
+    runs.sort(key=lambda r: r.get("started_at") or 0, reverse=True)
+    return {"runs": runs, "total": len(runs)}
+
+
+# ===========================================================================
+# Tool 7 — stop_pipeline
+# ===========================================================================
+
+async def stop_pipeline(run_name: str, confirm: bool = False) -> dict[str, Any]:
+    """Terminate a running pipeline. Gated by confirm=true.
+
+    Sends SIGTERM to the detached Nextflow process group. With confirm=false (the
+    default) it only reports what would be stopped, without signalling anything.
+    Stopping a run mid-flight may leave partial/incomplete outputs in the work
+    directory; the run can later be continued with run_pipeline(..., resume=true).
+
+    Args:
+        run_name: The run_name returned by run_pipeline.
+        confirm: Must be true to actually send the termination signal.
+
+    Returns (confirm=false): {"requires_confirmation": true, ...}
+    Returns (confirm=true):  {"run_name","status":"stopped","signal_sent",...}
+    """
+    logger.info("Tool call: stop_pipeline(%r, confirm=%r)", run_name, confirm)
+
+    meta = _load_run(run_name)
+    if meta is None:
+        return {
+            "error": True,
+            "code": "RUN_NOT_FOUND",
+            "message": f"No run named '{run_name}' is tracked. It may not have been launched here.",
+        }
+
+    pid = meta.get("pid", 0)
+    if not _pid_alive(pid):
+        return {
+            "run_name": run_name,
+            "status": meta.get("status", "unknown"),
+            "already_stopped": True,
+            "message": "This run is not currently active; nothing to stop.",
+        }
+
+    if not confirm:
+        return {
+            "requires_confirmation": True,
+            "run_name": run_name,
+            "pid": pid,
+            "message": (
+                f"Run '{run_name}' (pid {pid}) is active. Call stop_pipeline again "
+                f"with confirm=true to send SIGTERM. Partial outputs may remain; you "
+                f"can resume later with run_pipeline(..., resume=true)."
+            ),
+            "review_required": True,
+        }
+
+    sent = _terminate_pid(pid)
+    meta["status"] = "stopped"
+    meta["ended_at"] = time.time()
+    _save_run(run_name, meta)
+
+    return {
+        "run_name": run_name,
+        "status": "stopped",
+        "signal_sent": sent,
+        "message": (
+            "Termination signal sent." if sent else
+            "Could not signal the process (it may have just exited)."
+        ),
+        "next_steps": [
+            f"Resume later with run_pipeline(..., resume=true) using run_name '{run_name}'.",
+        ],
+        "review_required": True,
+    }
+
+
+# ===========================================================================
+# Tool 8 — diagnose_run_failure
+# ===========================================================================
+
+async def diagnose_run_failure(run_name: str) -> dict[str, Any]:
+    """Explain WHY a failed run failed, and how to fix it.
+
+    Goes beyond tailing the log: locates the failed process and its work directory
+    from the Nextflow log, reads the task's .command.err / .command.sh / .exitcode,
+    classifies the root cause (out of memory, time limit, disk, container/engine,
+    missing input, or a tool-level error), and proposes concrete fixes. When
+    ANTHROPIC_API_KEY is set the diagnosis is refined by an LLM reading the actual
+    error text; otherwise a fast heuristic is used.
+
+    Run this after get_run_status reports status="failed".
+
+    Args:
+        run_name: The run_name returned by run_pipeline.
+
+    Returns:
+        {
+          "run_name","status",
+          "failed_process": str | None,
+          "exit_code": int | None,
+          "work_dir": str | None,
+          "error_excerpt": [str],
+          "likely_cause": str,
+          "suggested_fixes": [str],
+          "command_preview": str | None,
+          "analysis_method": "llm" | "heuristic",
+          "review_required": true
+        }
+    """
+    logger.info("Tool call: diagnose_run_failure(%r)", run_name)
+
+    meta = _load_run(run_name)
+    if meta is None:
+        return {
+            "error": True,
+            "code": "RUN_NOT_FOUND",
+            "message": f"No run named '{run_name}' is tracked. It may not have been launched here.",
+        }
+
+    log_path = Path(meta.get("log_file", ""))
+    log_text = log_path.read_text(errors="replace") if log_path.exists() else ""
+    status = meta.get("status", "unknown")
+    if status not in ("failed",):
+        # Re-derive from the log in case the registry is stale.
+        if not _pid_alive(meta.get("pid", 0)):
+            status = _scan_log_for_status(log_text)
+
+    parsed = _parse_failure(log_text)
+
+    # Pull the failed task's own files for richer evidence.
+    work_files = _read_work_dir(parsed.get("work_dir"))
+    error_text = work_files.get("command_err") or "\n".join(parsed.get("error_excerpt", []))
+    exit_code = work_files.get("exit_code")
+    if exit_code is None:
+        exit_code = parsed.get("exit_code")
+
+    # Heuristic baseline (always available); LLM refines if a key is present.
+    cause, fixes = _classify_failure(exit_code, error_text)
+    method = "heuristic"
+
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        refined = await _llm_diagnose(meta, parsed, work_files, error_text, exit_code)
+        if refined is not None:
+            cause = refined.get("likely_cause", cause)
+            fixes = refined.get("suggested_fixes", fixes) or fixes
+            method = "llm"
+
+    return {
+        "run_name": run_name,
+        "status": status,
+        "failed_process": parsed.get("failed_process"),
+        "exit_code": exit_code,
+        "work_dir": parsed.get("work_dir"),
+        "error_excerpt": _tail_lines(error_text, 25) if error_text else [],
+        "likely_cause": cause,
+        "suggested_fixes": fixes,
+        "command_preview": work_files.get("command_sh"),
+        "analysis_method": method,
+        "review_required": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Failure parsing & classification
+# ---------------------------------------------------------------------------
+
+_PROCESS_RE = re.compile(r"Error executing process\s*>\s*'?([^'\n]+)'?")
+_EXIT_INLINE_RE = re.compile(r"exit status\s*\(?(\d+)\)?", re.IGNORECASE)
+_WORKDIR_RE = re.compile(r"Work dir:\s*\n\s*(\S+)", re.IGNORECASE)
+
+
+def _parse_failure(log_text: str) -> dict[str, Any]:
+    """Extract failed process, exit code, work dir, and error block from a NF log."""
+    out: dict[str, Any] = {
+        "failed_process": None,
+        "exit_code": None,
+        "work_dir": None,
+        "error_excerpt": [],
+    }
+    if not log_text:
+        return out
+
+    m = _PROCESS_RE.search(log_text)
+    if m:
+        out["failed_process"] = m.group(1).strip()
+
+    m = _EXIT_INLINE_RE.search(log_text)
+    if m:
+        try:
+            out["exit_code"] = int(m.group(1))
+        except ValueError:
+            pass
+
+    m = _WORKDIR_RE.search(log_text)
+    if m:
+        out["work_dir"] = m.group(1).strip()
+
+    out["error_excerpt"] = _extract_section(log_text, "Command error:")
+    return out
+
+
+def _extract_section(log_text: str, header: str) -> list[str]:
+    """Return the indented lines following a 'Header:' marker in a Nextflow error."""
+    lines = log_text.splitlines()
+    collected: list[str] = []
+    capturing = False
+    for line in lines:
+        if header.lower() in line.lower():
+            capturing = True
+            continue
+        if capturing:
+            # Section ends at the next non-indented, non-empty line.
+            if line and not line.startswith((" ", "\t")):
+                break
+            if line.strip():
+                collected.append(line.strip())
+    return collected
+
+
+def _read_work_dir(work_dir: str | None) -> dict[str, Any]:
+    """Read the failed task's .command.err/.command.sh/.exitcode if accessible."""
+    out: dict[str, Any] = {"command_err": None, "command_sh": None, "exit_code": None}
+    if not work_dir:
+        return out
+    base = Path(work_dir)
+    if not base.exists():
+        return out
+
+    err = base / ".command.err"
+    if err.exists():
+        try:
+            out["command_err"] = _tail_text(err.read_text(errors="replace"), 40)
+        except OSError:
+            pass
+
+    sh = base / ".command.sh"
+    if sh.exists():
+        try:
+            out["command_sh"] = _tail_text(sh.read_text(errors="replace"), 30)
+        except OSError:
+            pass
+
+    code = base / ".exitcode"
+    if code.exists():
+        try:
+            out["exit_code"] = int(code.read_text(errors="replace").strip())
+        except (OSError, ValueError):
+            pass
+
+    return out
+
+
+def _classify_failure(exit_code: int | None, error_text: str | None) -> tuple[str, list[str]]:
+    """Heuristic root-cause + concrete fixes from exit code and error text."""
+    text = (error_text or "").lower()
+
+    if exit_code == 137 or any(s in text for s in ("out of memory", "oom", "killed", "memory limit", "exceeds available memory")):
+        return (
+            "Out of memory — the process was killed for exceeding its memory allocation.",
+            [
+                "Increase the memory for the failing process via a custom config "
+                "(process.withName:'<PROCESS>' { memory = '32 GB' }) or raise --max_memory.",
+                "Run on a machine/queue with more RAM, or reduce the number of parallel tasks.",
+                "Re-run with run_pipeline(..., resume=true) so completed tasks are not repeated.",
+            ],
+        )
+
+    if exit_code in (140, 143) or any(s in text for s in ("time limit", "walltime", "killed by signal 15", "exceeded the time")):
+        return (
+            "Time limit exceeded — the scheduler or engine stopped the process.",
+            [
+                "Increase the time budget for the process (process.time) or raise --max_time.",
+                "Resume with run_pipeline(..., resume=true) to continue from cached tasks.",
+            ],
+        )
+
+    if "no space left on device" in text or "disk quota exceeded" in text:
+        return (
+            "Out of disk space in the work directory.",
+            [
+                "Free space or point the work directory at a larger volume "
+                "(run_pipeline(..., work_dir=...)).",
+                "Remove old work directories once runs are summarised.",
+            ],
+        )
+
+    if any(s in text for s in ("unable to find image", "manifest unknown", "pull access denied",
+                               "cannot connect to the docker daemon", "error pulling image",
+                               "failed to pull")):
+        return (
+            "Container image or engine problem — the required image could not be obtained.",
+            [
+                "Check the container engine is running (check_execution_environment) and has network access.",
+                "Verify the chosen -profile matches an available engine.",
+                "Retry setup_environment to pre-pull the pipeline and resolve config.",
+            ],
+        )
+
+    if "command not found" in text:
+        return (
+            "A tool was not found in the process environment.",
+            [
+                "Ensure you are using a container/conda profile (-profile docker|singularity|conda), "
+                "not running tools from the host.",
+                "Re-run setup_environment to resolve the pipeline configuration.",
+            ],
+        )
+
+    if any(s in text for s in ("no such file", "does not exist", "cannot open", "not found")):
+        return (
+            "A required input or reference file was missing.",
+            [
+                "Check the file paths in your samplesheet are correct and accessible "
+                "(validate_samplesheet).",
+                "Confirm the reference (--genome or --fasta) is set and reachable.",
+            ],
+        )
+
+    if exit_code is not None and exit_code != 0:
+        return (
+            f"A tool exited with a non-zero status ({exit_code}) — a tool-level error.",
+            [
+                "Inspect error_excerpt and command_preview for the specific message.",
+                "Common causes: malformed input, an unsupported parameter combination, "
+                "or a corrupt input file. Fix and resume with run_pipeline(..., resume=true).",
+            ],
+        )
+
+    return (
+        "Cause could not be determined automatically.",
+        [
+            "Inspect the work_dir's .command.err and .command.log directly.",
+            "Re-run get_run_status for the full log tail, or set ANTHROPIC_API_KEY "
+            "for an AI-assisted diagnosis.",
+        ],
+    )
+
+
+async def _llm_diagnose(
+    meta: dict[str, Any],
+    parsed: dict[str, Any],
+    work_files: dict[str, Any],
+    error_text: str | None,
+    exit_code: int | None,
+) -> dict[str, Any] | None:
+    """Refine the failure diagnosis via Claude reading the actual error. None on failure."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        return None
+
+    prompt = f"""You are a Nextflow/nf-core troubleshooting expert. A pipeline run failed.
+Diagnose the root cause and give concrete, actionable fixes.
+
+Pipeline: nf-core/{meta.get('pipeline')} (version {meta.get('version')})
+Profile: {meta.get('profile')}
+Failed process: {parsed.get('failed_process')}
+Exit code: {exit_code}
+
+--- Command that was run (.command.sh) ---
+{work_files.get('command_sh') or '(unavailable)'}
+
+--- Error output (.command.err / log) ---
+{error_text or '(no error text captured)'}
+
+Respond with ONLY valid JSON:
+{{
+  "likely_cause": "<one sentence root cause>",
+  "suggested_fixes": ["<concrete fix>", "<concrete fix>"]
+}}"""
+
+    try:
+        import json as _json
+        client = anthropic.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = message.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed_resp = _json.loads(raw.strip())
+        if not isinstance(parsed_resp.get("suggested_fixes"), list):
+            return None
+        return parsed_resp
+    except Exception as exc:  # noqa: BLE001 — degrade to heuristic
+        logger.warning("LLM diagnosis failed for %s: %s", meta.get("run_name"), exc)
+        return None
+
+
+# ===========================================================================
+# Tool 9 — diagnose_resume
+# ===========================================================================
+
+async def diagnose_resume(run_name: str) -> dict[str, Any]:
+    """Predict whether `-resume` will actually reuse cached work, and why not.
+
+    Nextflow computes each task's cache key from the full path, last-modified time,
+    and size of its inputs, and needs the .nextflow cache plus the work directory
+    intact. A single changed input or a deleted work dir silently forces a full
+    re-run — a notorious source of confusion. This checks all three up front:
+    the cache directory, the work directory, and whether any recorded input file
+    has changed since the run was launched.
+
+    Run this before re-launching with run_pipeline(..., resume=true).
+
+    Args:
+        run_name: The run_name returned by run_pipeline.
+
+    Returns:
+        {
+          "run_name",
+          "resume_will_reuse_cache": bool,
+          "cache_present": bool,
+          "work_dir_present": bool,
+          "changed_inputs": [{"path","reason"}],
+          "issues": [str],
+          "recommendations": [str],
+          "review_required": true
+        }
+    """
+    logger.info("Tool call: diagnose_resume(%r)", run_name)
+
+    meta = _load_run(run_name)
+    if meta is None:
+        return {
+            "error": True,
+            "code": "RUN_NOT_FOUND",
+            "message": f"No run named '{run_name}' is tracked. It may not have been launched here.",
+        }
+
+    launch_dir = Path(meta.get("launch_dir") or ".")
+    cache_present = (launch_dir / ".nextflow").exists()
+    work_dir_present = (launch_dir / "work").exists()
+
+    changed = _compare_fingerprints(meta.get("input_fingerprints", {}))
+
+    issues: list[str] = []
+    if not cache_present:
+        issues.append(
+            f"Nextflow cache (.nextflow/) not found in the launch directory "
+            f"({launch_dir}) — there is no cache to resume from; the run will start over."
+        )
+    if not work_dir_present:
+        issues.append(
+            f"Work directory ({launch_dir / 'work'}) not found — cached task outputs "
+            f"are gone, so resume will re-execute everything."
+        )
+    for ch in changed:
+        issues.append(f"Input changed: {ch['path']} ({ch['reason']}) — tasks using it will re-run.")
+
+    resume_ok = cache_present and work_dir_present and not changed
+
+    recommendations: list[str] = []
+    if resume_ok:
+        recommendations.append(
+            "Cache, work directory, and inputs are intact — "
+            "run_pipeline(..., resume=true) should reuse completed tasks."
+        )
+    else:
+        if not cache_present or not work_dir_present:
+            recommendations.append(
+                "Preserve both .nextflow/ and work/ between runs to enable resume; "
+                "without them a fresh run is required."
+            )
+        if changed:
+            recommendations.append(
+                "Restore the original input files (same path, contents, and timestamp) "
+                "or accept that the affected steps will re-run. Re-generating a samplesheet "
+                "changes its timestamp even if contents are identical."
+            )
+
+    return {
+        "run_name": run_name,
+        "resume_will_reuse_cache": resume_ok,
+        "cache_present": cache_present,
+        "work_dir_present": work_dir_present,
+        "changed_inputs": changed,
+        "issues": issues,
+        "recommendations": recommendations,
+        "review_required": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Input fingerprinting (for resume diagnosis)
+# ---------------------------------------------------------------------------
+
+def _fingerprint_file(path: str) -> dict[str, Any] | None:
+    """Return {size, mtime} for a local file, or None if it isn't an accessible file."""
+    try:
+        st = Path(path).stat()
+    except OSError:
+        return None
+    return {"size": st.st_size, "mtime": round(st.st_mtime, 3)}
+
+
+def _fingerprint_inputs(samplesheet_path: str) -> dict[str, dict[str, Any]]:
+    """Fingerprint the samplesheet and every local file path referenced inside it.
+
+    Nextflow's resume cache is sensitive to the path/mtime/size of every input, so
+    we record the samplesheet itself plus the data files it points to. Cloud paths
+    and unreadable cells are skipped.
+    """
+    prints: dict[str, dict[str, Any]] = {}
+    fp = _fingerprint_file(samplesheet_path)
+    if fp:
+        prints[samplesheet_path] = fp
+
+    # Scan the samplesheet for referenced local file paths.
+    try:
+        text = Path(samplesheet_path).read_text(errors="replace")
+    except OSError:
+        return prints
+
+    for cell in re.split(r"[,\t\n\r]+", text):
+        cell = cell.strip().strip('"').strip("'")
+        if not cell or "://" in cell:
+            continue
+        # Only treat things that look like file paths and actually exist.
+        if ("/" in cell or "." in cell) and Path(cell).is_file():
+            cfp = _fingerprint_file(cell)
+            if cfp:
+                prints[cell] = cfp
+    return prints
+
+
+def _compare_fingerprints(recorded: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
+    """Compare recorded input fingerprints against the current filesystem state."""
+    changed: list[dict[str, str]] = []
+    for path, old in (recorded or {}).items():
+        now = _fingerprint_file(path)
+        if now is None:
+            changed.append({"path": path, "reason": "file no longer exists"})
+            continue
+        if now["size"] != old.get("size"):
+            changed.append({"path": path, "reason": "size changed"})
+        elif now["mtime"] != old.get("mtime"):
+            changed.append({"path": path, "reason": "modification time changed"})
+    return changed
+
+
+# ===========================================================================
 # Subprocess helpers (monkeypatched in tests)
 # ===========================================================================
 
@@ -516,6 +1301,25 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _terminate_pid(pid: int) -> bool:
+    """Send SIGTERM to a detached run's process group. Returns True if signalled."""
+    if not pid:
+        return False
+    try:
+        # Runs are launched with start_new_session=True, so the pid leads its own
+        # process group — terminate the whole group so child tasks die too.
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:  # noqa: BLE001 — fall back to a direct signal
+        try:
+            os.kill(pid, signal.SIGTERM)
+            return True
+        except Exception:
+            return False
+
+
 # ===========================================================================
 # Probing / recommendation
 # ===========================================================================
@@ -565,14 +1369,38 @@ def _profile_available(profile: str, engines: dict[str, Any]) -> bool:
 # Command building
 # ===========================================================================
 
+def _build_params(
+    samplesheet_path: str,
+    outdir: str,
+    params: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Assemble the full parameter dict written to the -params-file.
+
+    The samplesheet (input) and outdir are pipeline parameters like any other, so
+    they live in the params file too. Leading dashes on keys (e.g. "--genome") are
+    stripped, since the params file uses bare parameter names. False booleans are
+    kept verbatim — unlike on the command line, an explicit false in a params file
+    is meaningful (it overrides a true default).
+    """
+    merged: dict[str, Any] = {"input": samplesheet_path, "outdir": outdir}
+    if params:
+        for key, value in params.items():
+            merged[key.lstrip("-")] = value
+    return merged
+
+
+def _write_params_file(params: dict[str, Any], path: Path) -> None:
+    """Write the parameter dict as JSON for Nextflow's -params-file (accepts JSON or YAML)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(params, indent=2, default=str))
+
+
 def _build_exec_args(
     pipeline_name: str,
     version: str,
     profile: str,
-    samplesheet_path: str,
-    outdir: str,
-    params: dict[str, Any] | None,
     run_name: str,
+    params_file: Path,
     resume: bool,
 ) -> list[str]:
     args = [
@@ -581,20 +1409,47 @@ def _build_exec_args(
         "-profile", profile,
         "-name", run_name,
         "-ansi-log", "false",
-        "--input", samplesheet_path,
-        "--outdir", outdir,
+        "-params-file", str(params_file),
     ]
     if resume:
         args.append("-resume")
-    if params:
-        for key, value in params.items():
-            flag = key if key.startswith("--") else f"--{key}"
-            if isinstance(value, bool):
-                if value:
-                    args.append(flag)
-            else:
-                args.extend([flag, str(value)])
     return args
+
+
+def _display_command(args: list[str]) -> str:
+    """Render exec args as a readable, line-wrapped command string.
+
+    Groups each flag with its value on one line (e.g. "-r 3.14.0") and keeps the
+    leading "nextflow run nf-core/<pipeline>" together on the first line.
+    """
+    if not args:
+        return ""
+    lines: list[str] = []
+    current: list[str] = []
+    for tok in args:
+        if tok.startswith("-") and current:
+            lines.append(" ".join(current))
+            current = [tok]
+        else:
+            current.append(tok)
+    if current:
+        lines.append(" ".join(current))
+    return " \\\n  ".join(lines)
+
+
+def _engine_versions(env: dict[str, Any]) -> dict[str, Any]:
+    """Pull installed tool versions out of a check_execution_environment result."""
+    versions: dict[str, Any] = {}
+    nf = env.get("nextflow") or {}
+    if nf.get("version"):
+        versions["nextflow"] = nf["version"]
+    java = env.get("java") or {}
+    if java.get("version"):
+        versions["java"] = java["version"]
+    for name, info in (env.get("engines") or {}).items():
+        if info.get("installed") and info.get("version"):
+            versions[name] = info["version"]
+    return versions
 
 
 def _default_run_name(pipeline_name: str) -> str:

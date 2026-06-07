@@ -93,8 +93,18 @@ uvx nfcore-mcp
 | `generate_launch_command` | `pipeline_name`, `version`, `profile`, `samplesheet_path`, `outdir`, `params?` | Validated `nextflow run` command string |
 | `check_execution_environment` | `profile?: str` | Probes for Nextflow, Java, and container/conda engines (Docker, Singularity, Apptainer, Podman, Conda, Mamba), checks the Docker daemon, recommends a viable `-profile`, and reports what's missing with install hints |
 | `setup_environment` | `pipeline_name`, `version`, `profile` | Runs `nextflow pull` + `nextflow config` to cache the pipeline and resolve its configuration as a dry run, before any compute is spent |
-| `run_pipeline` | `pipeline_name`, `version`, `profile`, `samplesheet_path`, `outdir`, `params?`, `run_name?`, `confirm: bool` | **Gated.** With `confirm=false` (default) it only previews the validated command and changes nothing. It launches a detached background `nextflow run` only when called with `confirm=true` — which must follow explicit human approval of the preview |
+| `run_pipeline` | `pipeline_name`, `version`, `profile`, `samplesheet_path`, `outdir`, `params?`, `run_name?`, `confirm: bool` | **Gated.** With `confirm=false` (default) it only previews the validated command and changes nothing. It launches a detached background `nextflow run` only when called with `confirm=true` — which must follow explicit human approval of the preview. Parameters are written to a `-params-file` (more robust than inline flags), and a full provenance manifest is recorded |
 | `get_run_status` | `run_name: str` | Polls a launched run: process liveness, log tail, and a parsed status (`running` / `completed` / `failed` / `unknown`) with suggested next steps |
+| `list_runs` | — | Lists every run launched through the server (newest first), refreshing liveness and resolving terminal status from the log |
+| `stop_pipeline` | `run_name`, `confirm: bool` | **Gated** like `run_pipeline`: previews unless `confirm=true`, then sends SIGTERM to the detached process group. The run can be continued later with `resume=true` |
+
+### Diagnostics & provenance
+
+| Tool | Inputs | Outputs |
+|------|--------|---------|
+| `diagnose_run_failure` | `run_name: str` | For a failed run, locates the failed process and its work dir, reads `.command.err`/`.command.sh`/`.exitcode`, classifies the root cause (out of memory, time limit, disk, container/engine, missing input, tool error) and proposes concrete fixes. LLM-refined when `ANTHROPIC_API_KEY` is set, heuristic otherwise |
+| `diagnose_resume` | `run_name: str` | Predicts whether `-resume` will actually reuse cached work: checks the `.nextflow` cache and `work/` dir exist and whether any recorded input file changed (path/mtime/size) since launch — the common silent causes of a full re-run |
+| `generate_methods_note` | `run_name: str` | Drafts a citable Methods paragraph from the recorded provenance (pipeline, pinned version, profile, exact non-default parameters, tool versions) with canonical nf-core + Nextflow citations and a pipeline Zenodo DOI pointer. Deterministic and auditable |
 
 ### Results
 
@@ -116,10 +126,13 @@ check_feasibility(goal, file_paths)              # match files+goal → candidat
   → generate_launch_command("rnaseq", ...)        # human reviews the command
   → check_execution_environment()                 # confirm Nextflow + a container engine
   → setup_environment("rnaseq", "3.14.0", "docker")
-  → run_pipeline(..., confirm=False)              # preview only
+  → run_pipeline(..., confirm=False)              # preview command + params
   → run_pipeline(..., confirm=True)               # human has approved — launch for real
   → get_run_status("myrun")                       # poll until completed/failed
-  → parse_run_summary("./results")
+  → diagnose_run_failure("myrun")                 # IF failed: root cause + fixes
+  → diagnose_resume("myrun")                       # before re-running with resume=true
+  → parse_run_summary("./results")                # QC once completed
+  → generate_methods_note("myrun")                # citable Methods paragraph
 ```
 
 ## Human-in-the-Loop (HITL)
@@ -134,6 +147,8 @@ Tools that generate executable content, propose AI-derived values, or gate compu
 - `suggest_parameters` — AI suggestions need domain expert review
 - `generate_launch_command` — pipelines consume real compute resources
 - `run_pipeline` — hard-gated behind `confirm=true`; with `confirm=false` it only previews and launches nothing
+- `stop_pipeline` — hard-gated behind `confirm=true`; previews what would be terminated otherwise
+- `diagnose_run_failure` / `diagnose_resume` / `generate_methods_note` — return findings for human review, not automatic action
 
 These are not blocking terminal prompts — they're structured signals in the JSON response. The calling agent is expected to surface them to the human, wait for a reply, and only then proceed.
 

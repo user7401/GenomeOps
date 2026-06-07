@@ -21,6 +21,11 @@ from nfcore_mcp.tools.execution import (
     setup_environment,
     run_pipeline,
     get_run_status,
+    list_runs,
+    stop_pipeline,
+    diagnose_run_failure,
+    diagnose_resume,
+    generate_methods_note,
 )
 from nfcore_mcp.tools.feasibility import check_feasibility
 from nfcore_mcp.tools.versioning import get_latest_version
@@ -71,7 +76,16 @@ Typical workflow:
     consumes compute. Always show the preview and get explicit user approval
     before calling with confirm=true.
 13. Use get_run_status to poll a launched run, then parse_run_summary on its
-    outdir once it completes.
+    outdir once it completes. Use list_runs to see every run launched here.
+14. If get_run_status reports status="failed", use diagnose_run_failure to get the
+    root cause (it reads the failed task's work dir) and concrete fixes.
+15. Before re-launching with resume=true, use diagnose_resume to confirm the cache
+    and inputs are intact — a changed input or missing work dir silently forces a
+    full re-run.
+16. Use stop_pipeline to terminate a run; like run_pipeline it is gated and only
+    sends the signal with confirm=true.
+17. Use generate_methods_note after a run to draft a citable Methods paragraph
+    from the recorded provenance (pipeline, version, exact parameters, citations).
 
 Always validate samplesheets before generating launch commands.
 Always present review_required outputs to the user for confirmation
@@ -97,6 +111,11 @@ mcp.tool(check_execution_environment)
 mcp.tool(setup_environment)
 mcp.tool(run_pipeline)
 mcp.tool(get_run_status)
+mcp.tool(list_runs)
+mcp.tool(stop_pipeline)
+mcp.tool(diagnose_run_failure)
+mcp.tool(diagnose_resume)
+mcp.tool(generate_methods_note)
 mcp.tool(parse_run_summary)
 
 
