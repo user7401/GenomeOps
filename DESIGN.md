@@ -7,9 +7,9 @@ A bioinformatician today who wants to run an nf-core pipeline must:
 1. Browse nf-co.re to find the right pipeline for their data type
 2. Open the pipeline docs to find the samplesheet format
 3. Manually inspect `assets/schema_input.json` to understand field types and allowed values
-4. Write a CSV samplesheet by hand, hoping they got strandedness, column order, and required fields right
+4. Write a CSV samplesheet by hand and get the required fields right
 5. Browse another docs page to find which `--genome` flag to pass
-6. Scan `nextflow_schema.json` (often 1,000+ lines of JSON) to find the right aligner flag
+6. Scan `nextflow_schema.json` to find the right aligner flag
 7. Assemble a `nextflow run` command from memory or examples
 8. Debug schema validation errors at pipeline startup
 
