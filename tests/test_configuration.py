@@ -329,6 +329,61 @@ async def test_configure_schema_not_found(mock_demo_schema):
     assert result["code"] == "SCHEMA_NOT_FOUND"
 
 
+@pytest.mark.asyncio
+async def test_reference_genome_params_always_surfaced(mock_demo_schema):
+    # genome/fasta have no default and aren't formally "required", but a wrong
+    # or missing reference silently invalidates the whole run — they must
+    # always be put to the human, never dropped or left to a default.
+    result = await configure_parameters("demo")
+    asked = {q["param"] for q in result["needs_user_input"]}
+    assert "--genome" in asked
+    assert "--fasta" in asked
+
+
+# ---------------------------------------------------------------------------
+# relevant_when gating — suppress questions that no longer apply
+# ---------------------------------------------------------------------------
+
+GATING_CLASSIFY_JSON = (
+    '{"classifications": {'
+    '"aligner": {"tier": "context_dependent", "rationale": "tool choice",'
+    ' "expert_guidance": null, "relevant_when": null},'
+    '"skip_markduplicates": {"tier": "context_dependent", "rationale": "dedup toggle",'
+    ' "expert_guidance": null, "relevant_when": "Only relevant when aligner is star_salmon"},'
+    '"min_mapped_reads": {"tier": "context_dependent", "rationale": "qc floor",'
+    ' "expert_guidance": null, "relevant_when": null}'
+    '}}'
+)
+
+
+@pytest.mark.asyncio
+async def test_relevant_when_suppresses_irrelevant_questions(mock_demo_schema, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _make_fake_anthropic(monkeypatch, GATING_CLASSIFY_JSON)
+
+    result = await configure_parameters("demo", user_choices={"aligner": "hisat2"})
+    asked = {q["param"] for q in result["needs_user_input"]}
+
+    # --aligner=hisat2 was pinned by the user, so the star_salmon-only
+    # follow-up question is now moot and should be gated out
+    assert "--skip_markduplicates" not in asked
+    assert "--aligner" not in asked  # pinned, not asked at all
+    assert "--min_mapped_reads" in asked  # unrelated question still surfaces
+
+
+@pytest.mark.asyncio
+async def test_relevant_when_keeps_question_when_condition_holds(mock_demo_schema, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _make_fake_anthropic(monkeypatch, GATING_CLASSIFY_JSON)
+
+    result = await configure_parameters("demo", user_choices={"aligner": "star_salmon"})
+    asked = {q["param"] for q in result["needs_user_input"]}
+
+    # condition ("aligner is star_salmon") is satisfied by the pinned choice —
+    # the question must still be asked
+    assert "--skip_markduplicates" in asked
+
+
 # ---------------------------------------------------------------------------
 # LLM-backed classification
 # ---------------------------------------------------------------------------

@@ -340,10 +340,15 @@ async def configure_parameters(
             continue
 
         if tier == PROVIDED_INPUT:
-            # input/outdir/genome — the user supplies these elsewhere; surface
-            # the ones that aren't already covered by a value as needed inputs,
-            # but only the genuinely required ones (input/outdir) and references.
+            # input/outdir/genome — the user supplies these elsewhere.
             if raw in {"input", "outdir"} or p["required"]:
+                needs_input.append(_question_for(p))
+            elif raw in _PROVIDED_INPUT_NAMES:
+                # Reference genome/annotation params (genome, fasta, gtf, ...)
+                # are arguably the most consequential choice in the run — a
+                # wrong or missing reference silently invalidates everything
+                # downstream. Never let these fall through to a default or
+                # vanish; always force an explicit human decision.
                 needs_input.append(_question_for(p))
             elif p["default"] is not None:
                 using_defaults.append({"param": flag, "default": p["default"]})
@@ -379,6 +384,16 @@ async def configure_parameters(
                     sources[pr["param"]] = "expert"
                     expert_suggested.append(pr)
                 needs_input = still_open
+
+    # 4. Drop questions whose relevant_when condition is now contradicted by
+    #    an already-resolved value (e.g. don't ask about a STAR-only knob once
+    #    --aligner=salmon has been pinned, derived, or expert-proposed).
+    suppressed = [
+        q for q in needs_input
+        if not _relevant_when_satisfied(q.get("relevant_when"), resolved, by_name)
+    ]
+    if suppressed:
+        needs_input = [q for q in needs_input if q not in suppressed]
 
     warning_bits = [
         "All values are starting points and must be reviewed before launching."
@@ -795,6 +810,41 @@ def _question_for(p: dict[str, Any]) -> dict[str, Any]:
         "expert_guidance": p.get("expert_guidance"),
         "relevant_when": p.get("relevant_when"),
     }
+
+
+def _relevant_when_satisfied(
+    relevant_when: str | None,
+    resolved: dict[str, Any],
+    by_name: dict[str, dict[str, Any]],
+) -> bool:
+    """Best-effort check of whether a free-text relevant_when condition still holds.
+
+    relevant_when is short prose from the LLM classifier, e.g. "Only used when
+    --aligner is star_salmon" or "--fasta is not set". We can't truly parse
+    arbitrary conditions, so we only suppress a question when we're confident
+    it's now moot: an already-resolved parameter is named in the text, that
+    parameter has enumerable allowed values, the text names one or more of
+    those values, and the resolved value isn't among the named ones. Anything
+    we can't confidently evaluate is treated as still relevant — we'd rather
+    over-ask than silently hide a question that still applies.
+    """
+    if not relevant_when:
+        return True
+    text_l = relevant_when.lower()
+    for p in by_name.values():
+        flag = p["name"]
+        if flag not in resolved:
+            continue
+        raw_l = p["raw_name"].lower()
+        if raw_l not in text_l and flag.lower() not in text_l:
+            continue
+        candidates = [str(v).lower() for v in (p.get("allowed_values") or [])]
+        if not candidates:
+            continue
+        mentioned = [c for c in candidates if c and c in text_l]
+        if mentioned and str(resolved[flag]).lower() not in mentioned:
+            return False
+    return True
 
 
 def _normalise_choices(choices: dict[str, Any]) -> dict[str, Any]:
