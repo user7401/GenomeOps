@@ -4,7 +4,7 @@ import logging
 import os
 from typing import Any
 
-from nfcore_mcp.clients.github import get_nextflow_schema
+from genomeops_mcp.clients.github import get_nextflow_schema
 
 logger = logging.getLogger(__name__)
 

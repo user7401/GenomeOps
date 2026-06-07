@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from nfcore_mcp.tools import execution
-from nfcore_mcp.tools.execution import (
+from genomeops_mcp.tools import execution
+from genomeops_mcp.tools.execution import (
     check_execution_environment,
     setup_environment,
     run_pipeline,
@@ -336,7 +336,7 @@ async def test_run_with_confirm_launches(monkeypatch, runs_dir):
     assert meta["status"] == "running"
     assert meta["params"]["genome"] == "GRCh38"
     assert meta["params_file"].endswith("testrun.params.json")
-    assert meta["launched_with"] == "nfcore-mcp"
+    assert meta["launched_with"] == "genomeops-mcp"
     assert meta["confirmed"] is True
 
 
@@ -406,7 +406,7 @@ async def test_status_failed(monkeypatch, runs_dir):
 # generate_methods_note
 # ---------------------------------------------------------------------------
 
-from nfcore_mcp.tools.execution import generate_methods_note
+from genomeops_mcp.tools.execution import generate_methods_note
 
 
 @pytest.mark.asyncio
@@ -461,7 +461,7 @@ async def test_methods_note_warns_on_unpinned_version(runs_dir):
 # list_runs
 # ---------------------------------------------------------------------------
 
-from nfcore_mcp.tools.execution import list_runs, stop_pipeline
+from genomeops_mcp.tools.execution import list_runs, stop_pipeline
 
 
 @pytest.mark.asyncio
@@ -564,7 +564,7 @@ async def test_stop_with_confirm_terminates(monkeypatch, runs_dir):
 # diagnose_run_failure
 # ---------------------------------------------------------------------------
 
-from nfcore_mcp.tools.execution import (
+from genomeops_mcp.tools.execution import (
     diagnose_run_failure,
     _parse_failure,
     _classify_failure,
@@ -692,7 +692,7 @@ async def test_diagnose_prefers_work_dir_files(monkeypatch, runs_dir, tmp_path):
 # diagnose_resume
 # ---------------------------------------------------------------------------
 
-from nfcore_mcp.tools.execution import (
+from genomeops_mcp.tools.execution import (
     diagnose_resume,
     _fingerprint_inputs,
     _compare_fingerprints,
@@ -787,7 +787,7 @@ async def test_diagnose_resume_flags_missing_cache_and_changed_input(tmp_path, r
 # estimate_resources
 # ---------------------------------------------------------------------------
 
-from nfcore_mcp.tools.execution import (
+from genomeops_mcp.tools.execution import (
     estimate_resources,
     _gather_input_signals,
     _scan_samplesheet_inputs,

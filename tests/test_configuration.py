@@ -9,8 +9,8 @@ import httpx
 import pytest
 import respx
 
-from nfcore_mcp.cache import cache_clear
-from nfcore_mcp.tools.configuration import (
+from genomeops_mcp.cache import cache_clear
+from genomeops_mcp.tools.configuration import (
     analyze_pipeline_schema,
     configure_parameters,
     _classify,

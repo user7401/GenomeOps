@@ -1,4 +1,4 @@
-"""Shared fixtures and mock data for nfcore-mcp tests."""
+"""Shared fixtures and mock data for GenomeOps tests."""
 
 import pytest
 import respx

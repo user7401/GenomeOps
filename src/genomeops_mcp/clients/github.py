@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from nfcore_mcp.cache import cache_get, cache_set
+from genomeops_mcp.cache import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
 

@@ -1,8 +1,10 @@
-# nfcore-mcp
+# GenomeOps
 
 > **⚠️ Status: developmental / pre-release.** This project is under active development. Tool names, schemas, and behavior may change without notice. Execution tools run real subprocesses (Nextflow, container engines) and can consume real compute — review every gated output carefully before approving anything, and expect rough edges.
+>
+> *Unofficial, community-built project. Not affiliated with, endorsed by, or maintained by the nf-core community or Seqera/Nextflow.*
 
-An MCP (Model Context Protocol) server that exposes the [nf-core](https://nf-co.re) bioinformatics pipeline ecosystem as structured, agent-consumable tools. Any AI agent — Claude, GPT, Cursor — can go from "I have these files and this goal" all the way through pipeline discovery, samplesheet generation, parameter configuration, and **launching and monitoring an actual analysis run**, without hallucinating nf-core-specific knowledge.
+GenomeOps is an MCP (Model Context Protocol) server that exposes the [nf-core](https://nf-co.re) / Nextflow bioinformatics pipeline ecosystem as structured, agent-consumable tools. Any AI agent — Claude, GPT, Cursor — can go from "I have these files and this goal" all the way through pipeline discovery, samplesheet generation, parameter configuration, and **launching and monitoring an actual analysis run**, without hallucinating nf-core-specific knowledge.
 
 The server is built around a human-in-the-loop (HITL) model: every step that involves a judgment call, a cost, or an irreversible action returns a structured "review required" signal so a human stays in control of what actually runs.
 
@@ -10,11 +12,11 @@ The server is built around a human-in-the-loop (HITL) model: every step that inv
 
 ```bash
 # Run directly with uvx (no install required)
-uvx nfcore-mcp
+uvx genomeops-mcp
 
 # Or install with uv
-uv pip install nfcore-mcp
-nfcore-mcp
+uv pip install genomeops-mcp
+genomeops-mcp
 ```
 
 ### Add to Claude Desktop
@@ -24,9 +26,9 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 ```json
 {
   "mcpServers": {
-    "nfcore": {
+    "genomeops": {
       "command": "uvx",
-      "args": ["nfcore-mcp"]
+      "args": ["genomeops-mcp"]
     }
   }
 }
@@ -35,7 +37,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 ### Add to Claude Code (CLI)
 
 ```bash
-claude mcp add nfcore -- uvx nfcore-mcp
+claude mcp add genomeops -- uvx genomeops-mcp
 ```
 
 Or add to `.claude/mcp.json` in your project:
@@ -43,9 +45,9 @@ Or add to `.claude/mcp.json` in your project:
 ```json
 {
   "mcpServers": {
-    "nfcore": {
+    "genomeops": {
       "command": "uvx",
-      "args": ["nfcore-mcp"]
+      "args": ["genomeops-mcp"]
     }
   }
 }
@@ -55,7 +57,7 @@ Or add to `.claude/mcp.json` in your project:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-uvx nfcore-mcp
+uvx genomeops-mcp
 ```
 
 ## Tool Reference

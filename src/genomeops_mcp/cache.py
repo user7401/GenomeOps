@@ -7,7 +7,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_CACHE_DIR = Path.home() / ".cache" / "nfcore-mcp"
+_CACHE_DIR = Path.home() / ".cache" / "genomeops-mcp"
 
 
 def _cache_path(key: str) -> Path:

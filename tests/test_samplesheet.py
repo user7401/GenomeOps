@@ -1,12 +1,12 @@
 """Tests for samplesheet tools: schema, validation, and generation."""
 
 import pytest
-from nfcore_mcp.tools.samplesheet import (
+from genomeops_mcp.tools.samplesheet import (
     get_samplesheet_schema,
     validate_samplesheet,
     generate_samplesheet,
 )
-from nfcore_mcp.cache import cache_clear
+from genomeops_mcp.cache import cache_clear
 
 
 @pytest.fixture(autouse=True)

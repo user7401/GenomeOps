@@ -9,7 +9,7 @@ from typing import Any
 
 import jsonschema
 
-from nfcore_mcp.clients.github import get_samplesheet_schema as _fetch_schema
+from genomeops_mcp.clients.github import get_samplesheet_schema as _fetch_schema
 
 logger = logging.getLogger(__name__)
 

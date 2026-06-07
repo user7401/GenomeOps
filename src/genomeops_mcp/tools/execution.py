@@ -32,11 +32,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from nfcore_mcp.tools.results import generate_launch_command
+from genomeops_mcp.tools.results import generate_launch_command
 
 logger = logging.getLogger(__name__)
 
-_RUNS_DIR = Path.home() / ".cache" / "nfcore-mcp" / "runs"
+_RUNS_DIR = Path.home() / ".cache" / "genomeops-mcp" / "runs"
 _LOG_TAIL_LINES = 40
 
 # Container/conda engines, in descending order of nf-core preference.
@@ -394,7 +394,7 @@ async def run_pipeline(
         "profile": profile,
         # Provenance: record that this run was launched by an agent via this MCP
         # server with explicit human confirmation (nf-core asks for AI transparency).
-        "launched_with": "nfcore-mcp",
+        "launched_with": "genomeops-mcp",
         "confirmed": True,
         "engine_versions": _engine_versions(env),
     }
@@ -574,7 +574,7 @@ async def generate_methods_note(run_name: str) -> dict[str, Any]:
     outdir = meta.get("outdir")
     if outdir:
         try:
-            from nfcore_mcp.tools.results import parse_run_summary
+            from genomeops_mcp.tools.results import parse_run_summary
             summary = await parse_run_summary(outdir)
             if summary.get("summary_available"):
                 n = len(summary.get("samples", []))
@@ -606,7 +606,7 @@ async def generate_methods_note(run_name: str) -> dict[str, Any]:
     if qc_sentence:
         sentences.append(qc_sentence.strip())
     sentences.append(
-        "This analysis was launched via the nfcore-mcp agent tooling with explicit "
+        "This analysis was launched via the GenomeOps agent tooling with explicit "
         "user confirmation; the complete parameter set is recorded in the run's "
         "params file for reproducibility."
     )

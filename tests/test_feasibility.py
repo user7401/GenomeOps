@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from nfcore_mcp.cache import cache_clear
-from nfcore_mcp.tools.feasibility import (
+from genomeops_mcp.cache import cache_clear
+from genomeops_mcp.tools.feasibility import (
     check_feasibility,
     _probe_one,
     _probe_files,

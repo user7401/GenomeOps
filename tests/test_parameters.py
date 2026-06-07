@@ -1,8 +1,8 @@
 """Tests for parameter tools: get_parameters and suggest_parameters."""
 
 import pytest
-from nfcore_mcp.tools.parameters import get_parameters, suggest_parameters
-from nfcore_mcp.cache import cache_clear
+from genomeops_mcp.tools.parameters import get_parameters, suggest_parameters
+from genomeops_mcp.cache import cache_clear
 
 
 @pytest.fixture(autouse=True)

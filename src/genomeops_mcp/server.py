@@ -1,22 +1,22 @@
-"""nfcore-mcp FastMCP server — registers all tools and exposes the entrypoint."""
+"""GenomeOps FastMCP server — registers all tools and exposes the entrypoint."""
 
 import logging
 
 from fastmcp import FastMCP
 
-from nfcore_mcp.tools.discovery import list_pipelines, get_pipeline_info
-from nfcore_mcp.tools.samplesheet import (
+from genomeops_mcp.tools.discovery import list_pipelines, get_pipeline_info
+from genomeops_mcp.tools.samplesheet import (
     get_samplesheet_schema,
     validate_samplesheet,
     generate_samplesheet,
 )
-from nfcore_mcp.tools.parameters import get_parameters, suggest_parameters
-from nfcore_mcp.tools.configuration import (
+from genomeops_mcp.tools.parameters import get_parameters, suggest_parameters
+from genomeops_mcp.tools.configuration import (
     analyze_pipeline_schema,
     configure_parameters,
 )
-from nfcore_mcp.tools.results import generate_launch_command, parse_run_summary
-from nfcore_mcp.tools.execution import (
+from genomeops_mcp.tools.results import generate_launch_command, parse_run_summary
+from genomeops_mcp.tools.execution import (
     check_execution_environment,
     setup_environment,
     estimate_resources,
@@ -28,8 +28,8 @@ from nfcore_mcp.tools.execution import (
     diagnose_resume,
     generate_methods_note,
 )
-from nfcore_mcp.tools.feasibility import check_feasibility
-from nfcore_mcp.tools.versioning import get_latest_version
+from genomeops_mcp.tools.feasibility import check_feasibility
+from genomeops_mcp.tools.versioning import get_latest_version
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,7 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
-    name="nfcore-mcp",
+    name="genomeops-mcp",
     instructions="""
 You are connected to the nf-core bioinformatics pipeline ecosystem.
 
@@ -128,7 +128,7 @@ mcp.tool(parse_run_summary)
 
 
 def main() -> None:
-    logger.info("Starting nfcore-mcp server")
+    logger.info("Starting GenomeOps MCP server")
     mcp.run()
 
 

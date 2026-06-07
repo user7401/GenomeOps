@@ -25,8 +25,8 @@ import os
 import re
 from typing import Any
 
-from nfcore_mcp.cache import cache_get, cache_set
-from nfcore_mcp.clients.github import get_nextflow_schema
+from genomeops_mcp.cache import cache_get, cache_set
+from genomeops_mcp.clients.github import get_nextflow_schema
 
 logger = logging.getLogger(__name__)
 

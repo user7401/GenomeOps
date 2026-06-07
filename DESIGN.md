@@ -1,4 +1,4 @@
-# Design: nfcore-mcp
+# Design: GenomeOps
 
 ## 1. The Problem
 
@@ -24,7 +24,7 @@ This is fine for experts who run the same pipeline weekly. For occasional users,
 
 ## 3. The Agent-Native Interface
 
-nfcore-mcp turns these raw data sources into **semantic tools**:
+GenomeOps turns these raw data sources into **semantic tools**:
 
 | Raw interface | Agent-native tool |
 |---|---|
@@ -42,7 +42,7 @@ nfcore-mcp turns these raw data sources into **semantic tools**:
 
 ### Scenario: Agent building a samplesheet for RNA-seq
 
-**Without nfcore-mcp:**
+**Without GenomeOps:**
 ```
 User: Create a samplesheet for rnaseq with these files: sample_A_R1.fastq.gz, sample_A_R2.fastq.gz
 
@@ -55,7 +55,7 @@ sample_A,sample_A_R1.fastq.gz,sample_A_R2.fastq.gz,auto
 # Agent had no access to the actual schema, hallucinated the field value
 ```
 
-**With nfcore-mcp:**
+**With GenomeOps:**
 ```
 Agent calls: get_samplesheet_schema("rnaseq")
 → learns strandedness must be one of: forward, reverse, unstranded
@@ -71,7 +71,7 @@ Agent presents CSV to user with review_required: true and strandedness warning
 
 ### Scenario: Agent choosing parameters for DE analysis
 
-**Without nfcore-mcp:**
+**Without GenomeOps:**
 ```
 User: Run rnaseq for differential expression in human fibroblasts
 
@@ -80,7 +80,7 @@ Agent: Use these flags: --genome hg38 --aligner star --pseudo_aligner salmon
 # Wrong: --aligner star doesn't exist (correct: star_salmon, star_rsem, hisat2)
 ```
 
-**With nfcore-mcp:**
+**With GenomeOps:**
 ```
 Agent calls: suggest_parameters("rnaseq", "human fibroblasts, DE analysis, paired-end")
 → returns:
@@ -117,7 +117,7 @@ Pipelines consume real compute resources and may incur cloud costs. The assemble
 | Samplesheet schema | 24 hours | Immutable per version tag |
 | Nextflow schema | 24 hours | Immutable per version tag |
 
-Cache lives at `~/.cache/nfcore-mcp/`. Clear with `cache_clear()` from `nfcore_mcp.cache`.
+Cache lives at `~/.cache/genomeops-mcp/`. Clear with `cache_clear()` from `genomeops_mcp.cache`.
 
 ## 7. Roadmap
 

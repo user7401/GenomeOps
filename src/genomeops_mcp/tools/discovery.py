@@ -4,7 +4,7 @@ import difflib
 import logging
 from typing import Any
 
-from nfcore_mcp.clients.nfcore_api import get_pipelines, get_pipeline
+from genomeops_mcp.clients.nfcore_api import get_pipelines, get_pipeline
 
 logger = logging.getLogger(__name__)
 

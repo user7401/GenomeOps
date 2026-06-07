@@ -1,8 +1,8 @@
 """Tests for discovery tools: list_pipelines and get_pipeline_info."""
 
 import pytest
-from nfcore_mcp.tools.discovery import list_pipelines, get_pipeline_info
-from nfcore_mcp.cache import cache_clear
+from genomeops_mcp.tools.discovery import list_pipelines, get_pipeline_info
+from genomeops_mcp.cache import cache_clear
 
 
 @pytest.fixture(autouse=True)

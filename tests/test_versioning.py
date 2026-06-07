@@ -4,9 +4,9 @@ import pytest
 import httpx
 import respx
 
-from nfcore_mcp.tools.versioning import get_latest_version
-from nfcore_mcp.clients.github import get_pipeline_release, _DEV_RE
-from nfcore_mcp.cache import cache_clear
+from genomeops_mcp.tools.versioning import get_latest_version
+from genomeops_mcp.clients.github import get_pipeline_release, _DEV_RE
+from genomeops_mcp.cache import cache_clear
 
 
 RELEASES_BASE = "https://api.github.com/repos/nf-core/{}/releases"

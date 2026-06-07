@@ -1,4 +1,4 @@
-src/nfcore_mcp/**/__pycache__
+src/genomeops_mcp/**/__pycache__
 **/__pycache__
 *.pyc
 .venv/

@@ -28,7 +28,7 @@ jobs:
         run: uv sync --extra dev
 
       - name: Run tests
-        run: uv run pytest --cov=nfcore_mcp --cov-report=term-missing -v
+        run: uv run pytest --cov=genomeops_mcp --cov-report=term-missing -v
 
   lint:
     runs-on: ubuntu-latest

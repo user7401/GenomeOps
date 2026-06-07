@@ -10,8 +10,8 @@ from typing import Any
 
 import httpx
 
-from nfcore_mcp.cache import cache_get, cache_set
-from nfcore_mcp.clients.github import _github_headers
+from genomeops_mcp.cache import cache_get, cache_set
+from genomeops_mcp.clients.github import _github_headers
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ _GITHUB_SEARCH = "https://api.github.com/search/repositories"
 _GITHUB_REPO = "https://api.github.com/repos/nf-core"
 _GITHUB_RELEASES = "https://api.github.com/repos/nf-core/{name}/releases/latest"  # kept for compat
 
-from nfcore_mcp.clients.github import get_pipeline_release as _get_pipeline_release
+from genomeops_mcp.clients.github import get_pipeline_release as _get_pipeline_release
 
 _PIPELINES_TTL = 3600       # 1 hour
 _PIPELINE_META_TTL = 3600   # 1 hour

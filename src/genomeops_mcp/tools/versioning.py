@@ -3,8 +3,8 @@
 import logging
 from typing import Any
 
-from nfcore_mcp.clients.github import get_pipeline_release
-from nfcore_mcp.clients.nfcore_api import get_pipelines
+from genomeops_mcp.clients.github import get_pipeline_release
+from genomeops_mcp.clients.nfcore_api import get_pipelines
 
 logger = logging.getLogger(__name__)
 

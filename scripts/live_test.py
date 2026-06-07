@@ -33,7 +33,7 @@ async def fail(label: str, exc=None, value=None):
 
 async def test_list_pipelines():
     await section("1. list_pipelines() — real API")
-    from nfcore_mcp.tools.discovery import list_pipelines
+    from genomeops_mcp.tools.discovery import list_pipelines
 
     try:
         result = await list_pipelines()
@@ -57,7 +57,7 @@ async def test_list_pipelines():
 
 async def test_list_pipelines_filtered(all_pipelines):
     await section("2. list_pipelines(topic='RNA-seq') — filter")
-    from nfcore_mcp.tools.discovery import list_pipelines
+    from genomeops_mcp.tools.discovery import list_pipelines
 
     try:
         result = await list_pipelines(topic="RNA-seq")
@@ -75,7 +75,7 @@ async def test_list_pipelines_filtered(all_pipelines):
 
 async def test_get_pipeline_info():
     await section("3. get_pipeline_info('rnaseq') — real API")
-    from nfcore_mcp.tools.discovery import get_pipeline_info
+    from genomeops_mcp.tools.discovery import get_pipeline_info
 
     try:
         result = await get_pipeline_info("rnaseq")
@@ -97,7 +97,7 @@ async def test_get_pipeline_info():
 
 async def test_pipeline_not_found():
     await section("4. get_pipeline_info('rnseq') — typo correction")
-    from nfcore_mcp.tools.discovery import get_pipeline_info
+    from genomeops_mcp.tools.discovery import get_pipeline_info
 
     try:
         result = await get_pipeline_info("rnseq")
@@ -114,7 +114,7 @@ async def test_pipeline_not_found():
 
 async def test_samplesheet_schema(pipeline_info: dict):
     await section("5. get_samplesheet_schema('rnaseq') — real GitHub")
-    from nfcore_mcp.tools.samplesheet import get_samplesheet_schema
+    from genomeops_mcp.tools.samplesheet import get_samplesheet_schema
 
     version = pipeline_info.get("latest_version", "main")
     try:
@@ -143,7 +143,7 @@ async def test_samplesheet_schema(pipeline_info: dict):
 
 async def test_validate_samplesheet(schema_result: dict):
     await section("6. validate_samplesheet — valid + invalid CSV")
-    from nfcore_mcp.tools.samplesheet import validate_samplesheet
+    from genomeops_mcp.tools.samplesheet import validate_samplesheet
 
     # Get required columns from real schema
     fields = schema_result.get("fields", [])
@@ -191,7 +191,7 @@ async def test_validate_samplesheet(schema_result: dict):
 
 async def test_generate_samplesheet():
     await section("7. generate_samplesheet — file pairing")
-    from nfcore_mcp.tools.samplesheet import generate_samplesheet
+    from genomeops_mcp.tools.samplesheet import generate_samplesheet
 
     files = [
         "/data/batch1/sample_A_R1_001.fastq.gz",
@@ -222,7 +222,7 @@ async def test_generate_samplesheet():
 
 async def test_get_parameters():
     await section("8. get_parameters('rnaseq') — real nextflow_schema.json")
-    from nfcore_mcp.tools.parameters import get_parameters
+    from genomeops_mcp.tools.parameters import get_parameters
 
     try:
         result = await get_parameters("rnaseq")
@@ -259,7 +259,7 @@ async def test_get_parameters():
 
 async def test_get_parameters_group_filter():
     await section("9. get_parameters(group='reference') — filter")
-    from nfcore_mcp.tools.parameters import get_parameters
+    from genomeops_mcp.tools.parameters import get_parameters
 
     try:
         result = await get_parameters("rnaseq", group="reference")
@@ -277,7 +277,7 @@ async def test_get_parameters_group_filter():
 
 async def test_check_feasibility():
     await section("10. check_feasibility — real API + keyword scoring")
-    from nfcore_mcp.tools.feasibility import check_feasibility
+    from genomeops_mcp.tools.feasibility import check_feasibility
 
     cases = [
         (
@@ -349,7 +349,7 @@ async def test_check_feasibility():
 
 async def test_sarek_schema():
     await section("11. get_samplesheet_schema('sarek') — different pipeline")
-    from nfcore_mcp.tools.samplesheet import get_samplesheet_schema
+    from genomeops_mcp.tools.samplesheet import get_samplesheet_schema
 
     try:
         result = await get_samplesheet_schema("sarek")
@@ -363,10 +363,10 @@ async def test_sarek_schema():
 
 
 async def main():
-    print("\nnfcore-mcp live integration test")
+    print("\nGenomeOps live integration test")
     print(f"Testing against real nf-co.re API + GitHub\n")
 
-    from nfcore_mcp.cache import cache_clear
+    from genomeops_mcp.cache import cache_clear
     cache_clear()
 
     all_pipelines = await test_list_pipelines()
