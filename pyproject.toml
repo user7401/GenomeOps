@@ -43,6 +43,7 @@ packages = ["src/genomeops_mcp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["integration: makes real network calls to nf-core / GitHub APIs (deselect with -m 'not integration')"]
 
 [tool.ruff]
 line-length = 100
