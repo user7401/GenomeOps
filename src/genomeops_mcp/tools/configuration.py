@@ -61,7 +61,7 @@ _TIER_LABELS = {
 }
 
 # Nextflow schema format hints for path-type parameters
-_PATH_FORMATS = {"file-path", "directory-path", "path"}
+_PATH_FORMATS = {"file-path", "directory-path", "path", "file-path-pattern"}
 
 # ---------------------------------------------------------------------------
 # Name-based heuristics (ordered classification rules use these)
@@ -100,6 +100,17 @@ _THRESHOLD_RE = re.compile(
 # Boolean toggles that switch a stage of the pipeline on/off (decision points).
 _TOGGLE_PREFIX_RE = re.compile(
     r"^(skip_|run_|with_|without_|save_|remove_|only_|use_|do_|enable_|disable_|no_)",
+    re.I,
+)
+
+# Description-level signal that an undefaulted string is really a file/reference
+# input the user supplies. Many nf-core schemas (notably sarek) type reference
+# files as bare strings with no `format`, but their descriptions follow a
+# convention ("Path to ...", "... indices", a named file format). Reading the
+# description — itself a fact in the schema — lets the heuristic recognise these
+# as provided inputs instead of conservatively escalating them to expert.
+_PATHISH_DESC_RE = re.compile(
+    r"^\s*path to\b|\bindices?\b|panel-of-normals|\bvcf\b|\bbed\b|\bfasta\b|\.gz\b",
     re.I,
 )
 
@@ -663,7 +674,16 @@ def _classify(p: dict[str, Any]) -> tuple[str, str]:
             f"{'…' if len(p['allowed_values']) > 4 else ''}) — depends on your experiment."
         )
 
-    # 6. Numeric thresholds whose right value depends on the experiment.
+    # 6. Boolean toggles are off-by-default in nf-core (an absent flag is
+    #    false), so they always have a safe default even when the schema omits
+    #    an explicit `default: false`. They must never be escalated to
+    #    expert_required — leaving a stage toggle at its default needs no domain
+    #    expertise. analyze_pipeline_schema separately surfaces meaningful
+    #    toggles as decision_points for the user to browse.
+    if p["type"] == "boolean":
+        return SAFE_DEFAULT, "Boolean toggle — defaults to off; flip it only if you need that stage."
+
+    # 7. Numeric thresholds whose right value depends on the experiment.
     #    With a default or an explicit range the user has a starting point
     #    (context-dependent); with neither, the value must be known up front
     #    (e.g. MACS effective genome size) — that is an expert decision.
@@ -672,20 +692,31 @@ def _classify(p: dict[str, Any]) -> tuple[str, str]:
             return CONTEXT_DEPENDENT, "Numeric threshold whose ideal value depends on your data/experiment."
         return EXPERT_REQUIRED, "Numeric threshold with no default or range — needs an expert value."
 
-    # 7. Open-ended values with no default and no obvious heuristic.
+    # 8. Undefaulted string whose description reads like a file/reference path.
+    #    nf-core often types reference files as bare strings without a `format`;
+    #    the description still names them ("Path to dbsnp file", "BWA indices").
+    if (
+        not has_default
+        and p["type"] == "string"
+        and not has_enum
+        and _PATHISH_DESC_RE.search(p["description"] or "")
+    ):
+        return PROVIDED_INPUT, "Reference/file input you supply (recognised from its description)."
+
+    # 9. Open-ended values with no default and no obvious heuristic.
     if not has_default and not p["is_path"] and p["type"] != "boolean":
         # Short/empty descriptions on undefaulted params are the hardest cases.
         return EXPERT_REQUIRED, "No default and no general heuristic — needs domain expertise."
 
-    # 8. Numeric with a default but no threshold semantics — usually safe.
+    # 10. Numeric with a default but no threshold semantics — usually safe.
     if is_numeric and has_default:
         return SAFE_DEFAULT, "Numeric option with a sensible default."
 
-    # 9. Booleans / defaulted strings fall through to safe default.
+    # 11. Booleans / defaulted strings fall through to safe default.
     if has_default:
         return SAFE_DEFAULT, "Has a sensible default."
 
-    # 10. Undefaulted path that isn't a core input → optional input.
+    # 12. Undefaulted path that isn't a core input → optional input.
     if p["is_path"]:
         return PROVIDED_INPUT, "Optional file input you may supply."
 
