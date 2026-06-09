@@ -235,6 +235,33 @@ async def test_auto_derives_single_end_from_data(mock_demo_schema):
     assert "--single_end" in derived
 
 
+def test_only_read_pairing_is_auto_derivable():
+    """read_length / fragment_size are experiment facts, not structural facts:
+    they must NOT be classified auto_derivable (where derivation would silently
+    return nothing). Only read pairing is genuinely derivable from the data."""
+    from genomeops_mcp.tools.configuration import _AUTO_DERIVABLE_RE
+    assert _AUTO_DERIVABLE_RE.search("single_end")
+    assert _AUTO_DERIVABLE_RE.search("paired_end")
+    assert not _AUTO_DERIVABLE_RE.search("read_length")
+    assert not _AUTO_DERIVABLE_RE.search("fragment_size")
+
+
+def test_read_length_and_fragment_size_become_questions():
+    """On the real chipseq schema, these must route to a user question (their
+    tier surfaces them), never to the auto_derivable dead-end."""
+    import json
+    from pathlib import Path
+    schema = json.loads(
+        (Path(__file__).parent / "fixtures" / "schemas" / "chipseq_2.0.0.json").read_text()
+    )
+    tiers = {p["raw_name"]: _classify(p)[0] for p in _parse_rich(schema)}
+    assert tiers["fragment_size"] != AUTO_DERIVABLE
+    assert tiers["read_length"] != AUTO_DERIVABLE
+    # both land in a tier that gets surfaced as a question
+    assert tiers["fragment_size"] in (CONTEXT_DEPENDENT, EXPERT_REQUIRED)
+    assert tiers["read_length"] in (CONTEXT_DEPENDENT, EXPERT_REQUIRED)
+
+
 @pytest.mark.asyncio
 async def test_context_and_expert_become_questions(mock_demo_schema):
     result = await configure_parameters("demo")

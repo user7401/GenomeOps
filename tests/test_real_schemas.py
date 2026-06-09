@@ -39,6 +39,7 @@ SCHEMAS = [
     ("rnaseq_3.14.0.json", "rnaseq", "3.14.0", "definitions"),
     ("sarek_3.5.1.json", "sarek", "3.5.1", "$defs"),
     ("demo_1.0.1.json", "demo", "1.0.1", "$defs"),
+    ("chipseq_2.0.0.json", "chipseq", "2.0.0", "definitions"),
 ]
 
 

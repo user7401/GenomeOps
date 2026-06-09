@@ -330,14 +330,16 @@ async def step_configure_parameters() -> dict[str, Any]:
     assert sources.get("--aligner") == "user"
     ok("User choices (--genome, --aligner) honoured and sources tagged 'user'")
 
-    # Data summary must drive single_end derivation
-    single_end_derived = next((d for d in auto_d if "single_end" in d["param"]), None)
-    if single_end_derived:
-        assert single_end_derived["value"] is False, \
-            "paired_end=True in data_summary must derive single_end=False"
-        ok(f"single_end auto-derived: {single_end_derived['value']} ({single_end_derived.get('evidence','')})")
-    else:
-        warn("single_end not auto-derived (may be absent from this schema version)")
+    # Data-derivation: rnaseq does NOT expose a single_end parameter — it infers
+    # read pairing from the samplesheet's fastq_2 column instead — so there is
+    # genuinely nothing to derive here. Assert we correctly did NOT invent one,
+    # and that nothing claimed to be auto-derived without real evidence.
+    assert not any("single_end" in d["param"] for d in auto_d), \
+        "rnaseq has no single_end param; nothing should be derived for it"
+    for d in auto_d:
+        assert d.get("evidence"), f"auto-derived {d['param']} must carry evidence"
+    info(f"Auto-derived (with evidence): {[d['param'] for d in auto_d] or 'none — rnaseq derives pairing from the samplesheet'}")
+    ok("No parameter was auto-derived without real evidence")
 
     # Reference inputs must be surfaced (gap-#3 fix)
     asked_params = {q["param"] for q in questions}

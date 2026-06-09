@@ -74,9 +74,13 @@ _PROVIDED_INPUT_NAMES = {
 }
 _INDEX_NAME_RE = re.compile(r"(_index$|^index$|bwa$|^star$|salmon$|hisat2$|bowtie2?$|bismark)", re.I)
 
-# Inferable from inspecting the files themselves.
+# Read pairing is the only thing we can genuinely read off the data structure
+# (presence of R2 mate files). Values like read_length / fragment_size are
+# experiment facts the user knows, not structural facts we can derive, so they
+# are deliberately NOT here — they route to context_dependent/expert questions
+# instead of pretending to be auto-derivable and silently resolving to nothing.
 _AUTO_DERIVABLE_RE = re.compile(
-    r"(single_end|paired_end|^paired$|read_length|fragment_size)", re.I
+    r"(single_end|paired_end|^paired$)", re.I
 )
 
 # Resource / reporting / boilerplate — always safe to leave at default.

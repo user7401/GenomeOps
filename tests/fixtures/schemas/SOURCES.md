@@ -8,9 +8,10 @@ around synthetic inputs.
 
 | File | Source | Schema convention |
 |------|--------|-------------------|
-| `rnaseq_3.14.0.json` | https://github.com/nf-core/rnaseq (tag `3.14.0`) | `definitions` |
-| `sarek_3.5.1.json`   | https://github.com/nf-core/sarek (tag `3.5.1`)   | `$defs` |
-| `demo_1.0.1.json`    | https://github.com/nf-core/demo (tag `1.0.1`)    | `$defs` |
+| `rnaseq_3.14.0.json`  | https://github.com/nf-core/rnaseq (tag `3.14.0`)  | `definitions` |
+| `sarek_3.5.1.json`    | https://github.com/nf-core/sarek (tag `3.5.1`)    | `$defs` |
+| `demo_1.0.1.json`     | https://github.com/nf-core/demo (tag `1.0.1`)     | `$defs` |
+| `chipseq_2.0.0.json`  | https://github.com/nf-core/chipseq (tag `2.0.0`)  | `definitions` |
 
 Both schema conventions are represented on purpose: nf-core migrated the
 JSON-Schema definitions block from `definitions` to `$defs` (between rnaseq
