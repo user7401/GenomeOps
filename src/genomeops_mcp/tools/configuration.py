@@ -156,7 +156,8 @@ async def analyze_pipeline_schema(
           "decision_points": [          # branch points that change the analysis path
             {"param","kind","options","default","stage","tier","affects"}
           ],
-          "path_count_estimate": int,   # product of decision-point option counts
+          "tool_choices": int,          # mutually-exclusive method selections (aligner, trimmer)
+          "optional_stages": int,       # on/off toggles for skippable/optional stages
           "conditional_dependencies": [ # params only relevant under a condition
             {"param","relevant_when"}
           ],
@@ -184,9 +185,13 @@ async def analyze_pipeline_schema(
     method = await _classify_all(params, pipeline_name, version)
 
     decision_points = _decision_points(params)
-    path_estimate = 1
-    for dp in decision_points:
-        path_estimate *= max(len(dp["options"]), 1)
+    # Characterise the decision space in terms a human can act on. The naive
+    # product of every option count is meaningless (40 boolean toggles alone is
+    # ~2^40 "paths"), so instead report the two distinct kinds of choice:
+    #   tool_choices    — mutually-exclusive method selections (aligner, trimmer)
+    #   optional_stages — on/off toggles for skippable/optional stages
+    tool_choices = sum(1 for dp in decision_points if dp["kind"] == "choice")
+    optional_stages = sum(1 for dp in decision_points if dp["kind"] == "toggle")
 
     tiers: dict[str, Any] = {}
     for tier in _TIER_ORDER:
@@ -206,10 +211,10 @@ async def analyze_pipeline_schema(
     n_ctx = len(tiers.get(CONTEXT_DEPENDENT, {}).get("params", []))
     n_expert = len(tiers.get(EXPERT_REQUIRED, {}).get("params", []))
     summary = (
-        f"nf-core/{pipeline_name}@{version} exposes {len(params)} parameters across "
-        f"{len(decision_points)} decision point(s), giving roughly {path_estimate} "
-        f"distinct analysis path(s). {n_ctx} parameter(s) depend on your experiment "
-        f"and {n_expert} need expert review; the rest are inputs you provide, "
+        f"nf-core/{pipeline_name}@{version} exposes {len(params)} parameters: "
+        f"{tool_choices} tool/method choice(s) and {optional_stages} optional "
+        f"stage toggle(s). {n_ctx} parameter(s) depend on your experiment and "
+        f"{n_expert} need expert review; the rest are inputs you provide, "
         f"data-derivable, or safe defaults."
     )
 
@@ -219,7 +224,8 @@ async def analyze_pipeline_schema(
         "classification_method": method,
         "parameter_count": len(params),
         "decision_points": decision_points,
-        "path_count_estimate": path_estimate,
+        "tool_choices": tool_choices,
+        "optional_stages": optional_stages,
         "conditional_dependencies": conditional,
         "tiers": tiers,
         "summary": summary,

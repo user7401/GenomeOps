@@ -179,10 +179,13 @@ async def test_analyze_returns_decision_points(mock_demo_schema):
 
 
 @pytest.mark.asyncio
-async def test_analyze_path_estimate_is_product(mock_demo_schema):
+async def test_analyze_counts_choices_and_toggles(mock_demo_schema):
     result = await analyze_pipeline_schema("demo")
-    # aligner(2) * skip_markduplicates(2) * narrow_peak(2) = 8
-    assert result["path_count_estimate"] == 8
+    # aligner is the one enum choice; skip_markduplicates + narrow_peak are toggles
+    assert result["tool_choices"] == 1
+    assert result["optional_stages"] == 2
+    # the meaningless combinatorial product is gone
+    assert "path_count_estimate" not in result
 
 
 @pytest.mark.asyncio

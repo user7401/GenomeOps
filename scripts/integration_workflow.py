@@ -267,7 +267,8 @@ async def step_analyze_pipeline_schema() -> dict[str, Any]:
     assert_no_error(result, "analyze_pipeline_schema")
 
     info(f"Classification method: {result.get('classification_method')}")
-    info(f"Path count estimate:   {result.get('path_count_estimate')}")
+    info(f"Tool/method choices:   {result.get('tool_choices')}")
+    info(f"Optional stage toggles: {result.get('optional_stages')}")
     dps = result.get("decision_points", [])
     info(f"Decision points: {len(dps)}")
     for dp in dps[:5]:
