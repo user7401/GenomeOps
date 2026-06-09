@@ -113,6 +113,7 @@ uvx genomeops-mcp
 
 | Tool | Inputs | Outputs |
 |------|--------|---------|
+| `inventory_results` | `results_dir: str` | Walks the output tree and classifies every file by format and semantic role (alignment, variants, gene_counts, qc_report, provenance, …) into a structured manifest grouped as `primary_outputs`, `qc`, `provenance`, `indices`, and `unclassified`. LLM-refined with one-sentence downstream hints when `ANTHROPIC_API_KEY` is set; heuristic otherwise |
 | `parse_run_summary` | `results_dir: str` | Per-sample QC (from MultiQC), flagged samples with reasons, and overall run status |
 
 ## Typical Agent Workflow
@@ -135,6 +136,7 @@ check_feasibility(goal, file_paths)              # match files+goal → candidat
   → get_run_status("myrun")                       # poll until completed/failed
   → diagnose_run_failure("myrun")                 # IF failed: root cause + fixes
   → diagnose_resume("myrun")                       # before re-running with resume=true
+  → inventory_results("./results")                # what files were produced + downstream hints
   → parse_run_summary("./results")                # QC once completed
   → generate_methods_note("myrun")                # citable Methods paragraph
 ```

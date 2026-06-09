@@ -15,7 +15,7 @@ from genomeops_mcp.tools.configuration import (
     analyze_pipeline_schema,
     configure_parameters,
 )
-from genomeops_mcp.tools.results import generate_launch_command, parse_run_summary
+from genomeops_mcp.tools.results import generate_launch_command, parse_run_summary, inventory_results
 from genomeops_mcp.tools.execution import (
     check_execution_environment,
     setup_environment,
@@ -125,6 +125,7 @@ mcp.tool(diagnose_run_failure)
 mcp.tool(diagnose_resume)
 mcp.tool(generate_methods_note)
 mcp.tool(parse_run_summary)
+mcp.tool(inventory_results)
 
 
 def main() -> None:
