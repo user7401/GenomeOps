@@ -155,11 +155,22 @@ async def test_generate_samplesheet_review_required(mock_github_schemas):
 
 
 @pytest.mark.asyncio
-async def test_generate_samplesheet_strandedness_warning(mock_github_schemas):
-    files = ["/data/sample_A_R1.fastq.gz"]
+async def test_generate_samplesheet_strandedness_left_blank(mock_github_schemas):
+    files = ["/data/sample_A_R1.fastq.gz", "/data/sample_A_R2.fastq.gz"]
     result = await generate_samplesheet("rnaseq", files)
+
+    # The server must not guess a scientific default — strandedness is left blank
+    # and the expert is told to set it.
     warnings_text = " ".join(result["warnings"]).lower()
     assert "strandedness" in warnings_text
+    assert "unstranded" not in result["samplesheet"]
+
+    lines = result["samplesheet"].splitlines()
+    header = lines[0].split(",")
+    assert "strandedness" in header
+    strand_idx = header.index("strandedness")
+    data_cells = lines[1].split(",")
+    assert data_cells[strand_idx] == ""
 
 
 @pytest.mark.asyncio

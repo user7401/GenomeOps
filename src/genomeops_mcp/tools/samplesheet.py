@@ -143,12 +143,13 @@ async def generate_samplesheet(
 ) -> dict[str, Any]:
     """Generate a samplesheet CSV from a list of input file paths.
 
-    Infers sample names by stripping standard FASTQ suffixes (_R1_001.fastq.gz, etc.),
-    pairs R1/R2 files automatically, and fills in reasonable defaults for
-    optional fields (e.g. strandedness = "unstranded").
+    Infers sample names by stripping standard FASTQ suffixes (_R1_001.fastq.gz, etc.)
+    and pairs R1/R2 files automatically. This is purely mechanical bookkeeping:
+    fields that depend on the experiment (e.g. strandedness) are left blank for you
+    to fill in — the server does not guess them.
 
-    Always sets review_required=true because strandedness and other metadata
-    cannot be reliably inferred from file names alone.
+    Always sets review_required=true because sample metadata cannot be reliably
+    inferred from file names alone.
 
     Args:
         pipeline_name: nf-core pipeline name (e.g. "rnaseq").
@@ -186,7 +187,7 @@ async def generate_samplesheet(
         "warnings": warnings,
         "review_required": True,
         "review_hint": (
-            "Verify strandedness matches your library prep protocol. "
+            "Fill in any experiment-specific columns left blank (e.g. strandedness). "
             "Check sample names are correct. "
             "Confirm paired-end pairing is as expected."
         ),
@@ -324,10 +325,12 @@ def _build_rows(
         row: dict[str, str] = {"sample": sample_name, "fastq_1": fp, "fastq_2": r2}
 
         if "strandedness" in properties or "strandedness" in required_cols:
-            row["strandedness"] = "unstranded"
+            # Strandedness is a library-prep fact, not something to guess from a
+            # filename. Leave it blank for the expert to fill in.
+            row["strandedness"] = ""
             warnings.append(
-                "Strandedness set to 'unstranded' for all samples. "
-                "Verify this matches your library preparation protocol."
+                "Strandedness left blank — set it yourself for every sample "
+                "(it depends on your library preparation protocol, not the filename)."
             )
 
         rows.append(row)

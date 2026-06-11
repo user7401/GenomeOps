@@ -53,21 +53,3 @@ class ValidationError(BaseModel):
 class ValidationResult(BaseModel):
     valid: bool
     errors: list[ValidationError] = Field(default_factory=list)
-
-
-class ParameterDef(BaseModel):
-    name: str
-    type: str
-    default: Any = None
-    description: str = ""
-    required: bool = False
-    allowed_values: list[str] = Field(default_factory=list)
-    is_path: bool = False
-    group: str = ""
-
-
-class SuggestedParameters(BaseModel):
-    suggested_params: dict[str, Any]
-    justifications: dict[str, str]
-    review_required: bool = True
-    warning: str = "Always review suggested parameters before launching a pipeline"

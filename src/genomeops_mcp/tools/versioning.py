@@ -18,9 +18,9 @@ async def get_latest_version(pipeline_name: str) -> dict[str, Any]:
     a warning is returned and review_required is set to true so the human can
     decide whether to proceed with the dev version or use the last stable release.
 
-    Always call this before get_samplesheet_schema, get_parameters, or
-    generate_launch_command to ensure schema URLs point to a pinned, immutable
-    version tag rather than the moving 'master' branch.
+    Always call this before get_samplesheet_schema or generate_launch_command to
+    ensure schema URLs point to a pinned, immutable version tag rather than the
+    moving 'master' branch.
 
     Args:
         pipeline_name: nf-core pipeline name (e.g. "rnaseq", "sarek").
